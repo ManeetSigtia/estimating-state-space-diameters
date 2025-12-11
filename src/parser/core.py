@@ -48,7 +48,7 @@ class SASParser:
         next(self.lines)  # end_variable
         return SASVariable(name, var_id, range_size, atom_names)
 
-    def _parse_state(self, variable_count: int) -> Tuple[int]:
+    def _parse_state(self, variable_count: int) -> Tuple[int, ...]:
         state = []
         for _ in range(variable_count):
             val = next(self.lines).strip()
@@ -88,30 +88,37 @@ class SASParser:
         for _ in range(effect_count):
             line = next(self.lines).split()
 
-            # The format is actually:
-            # [0] effect_conditions_count (usually 0)
-            # [1] var_id
-            # [2] pre_val
-            # [3] post_val
-
-            # If effect_conditions_count > 0, there are extra numbers at the start of the line!
+            # [0] is the count of conditions for this specific effect
             cond_count = int(line[0])
+            effect_conditions = []
 
-            # The standard parts are after the conditions
-            # Skip 'cond_count' pairs. Each pair is 2 numbers (var, val).
-            # The var_id is at index: 1 + (2 * cond_count)
+            # Loop through the condition pairs (if any)
+            # Conditions start at index 1. Each condition is 2 numbers (var, val).
+            for i in range(cond_count):
+                c_var_idx = 1 + (2 * i)
+                c_val_idx = c_var_idx + 1
+
+                c_var = int(line[c_var_idx])
+                c_val = int(line[c_val_idx])
+                effect_conditions.append((c_var, c_val))
+
+            # The standard effect triplet is always at the end
+            # Calculate the start index exactly as we discussed
             base_idx = 1 + (2 * cond_count)
 
             var_id = int(line[base_idx])
             pre_val = int(line[base_idx + 1])
             post_val = int(line[base_idx + 2])
 
-            # Logic: If pre_val is not -1, it's actually a precondition!
+            # Logic: If pre_val is not -1, it applies to the whole operator
             if pre_val != -1:
                 preconditions.append((var_id, pre_val))
 
-            effects.append((var_id, post_val))
+            # UPDATE: Store the effect WITH its specific conditions
+            # New Structure: (effect_var, new_value, list_of_conditions)
+            effects.append((var_id, post_val, effect_conditions))
 
         cost = int(next(self.lines))
         next(self.lines)  # end_operator
+
         return SASOperator(name, cost, preconditions, effects)

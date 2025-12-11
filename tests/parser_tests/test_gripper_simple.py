@@ -68,8 +68,8 @@ class TestGripperDomain(unittest.TestCase):
         self.assertIn((2, 0), pick_op.preconditions)
 
         # 3. Check Effects
-        self.assertIn((1, 1), pick_op.effects)  # Hand becomes Carrying (1)
-        self.assertIn((2, 2), pick_op.effects)  # Ball becomes Carried (2)
+        self.assertIn((1, 1, []), pick_op.effects)  # Hand becomes Carrying (1)
+        self.assertIn((2, 2, []), pick_op.effects)  # Ball becomes Carried (2)
 
     def test_drop_operator(self):
         """
@@ -89,15 +89,15 @@ class TestGripperDomain(unittest.TestCase):
         self.assertIn((2, 2), drop_op.preconditions)
 
         # 3. Check Effects
-        self.assertIn((1, 0), drop_op.effects)  # Hand becomes Free (0)
-        self.assertIn((2, 1), drop_op.effects)  # Ball becomes At Room B (1)
+        self.assertIn((1, 0, []), drop_op.effects)  # Hand becomes Free (0)
+        self.assertIn((2, 1, []), drop_op.effects)  # Ball becomes At Room B (1)
 
     def test_move_operator(self):
         """Test 'move rooma roomb'."""
         move_op = next(op for op in self.problem.operators if "move" in op.name)
         # Robot moves from 0 (Room A) to 1 (Room B)
         self.assertIn((0, 0), move_op.preconditions)
-        self.assertIn((0, 1), move_op.effects)
+        self.assertIn((0, 1, []), move_op.effects)
 
 
 if __name__ == "__main__":

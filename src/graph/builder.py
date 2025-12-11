@@ -34,14 +34,23 @@ class StateSpaceBuilder:
                     continue
 
                 # 1. Calculate next state
-                next_state_list = op.apply(current_state)
-                next_state = tuple(next_state_list)
+                next_state = op.apply(current_state)
 
                 # 2. Add Edge to Graph
-                # Store the cost and name so they can be used in algorithms later
-                self.graph.add_edge(
-                    current_state, next_state, weight=op.cost, label=op.name
-                )
+                # Check if we already found a path between these two nodes
+                if self.graph.has_edge(current_state, next_state):
+                    existing_weight = self.graph[current_state][next_state]["weight"]
+
+                    # Only update if the new operator is cheaper
+                    if op.cost < existing_weight:
+                        self.graph.add_edge(
+                            current_state, next_state, weight=op.cost, label=op.name
+                        )
+                else:
+                    # New connection
+                    self.graph.add_edge(
+                        current_state, next_state, weight=op.cost, label=op.name
+                    )
 
                 # 3. If this is a new state, add to queue
                 if next_state not in visited:

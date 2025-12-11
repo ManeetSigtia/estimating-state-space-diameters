@@ -49,7 +49,7 @@ class TestSimpleSwitch(unittest.TestCase):
 
         # Check Effect
         # Var 0 becomes 1 (On)
-        self.assertIn((0, 1), op.effects)
+        self.assertIn((0, 1, []), op.effects)
 
     def test_goal(self):
         """Test if the goal is parsed correctly."""
