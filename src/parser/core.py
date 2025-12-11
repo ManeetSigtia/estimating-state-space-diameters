@@ -45,7 +45,11 @@ class SASParser:
         atom_names = []
         for _ in range(range_size):
             atom_names.append(next(self.lines).strip())
-        next(self.lines)  # end_variable
+
+        check = next(self.lines).strip()
+        if check != "end_variable":
+            raise ValueError(f"Expected 'end_variable' but found '{check}'")
+
         return SASVariable(name, var_id, range_size, atom_names)
 
     def _parse_state(self, variable_count: int) -> Tuple[int, ...]:
@@ -54,7 +58,6 @@ class SASParser:
             val = next(self.lines).strip()
             state.append(int(val))
 
-        # Sanity Check: The very next line MUST be 'end_state'
         check_tag = next(self.lines).strip()
         if check_tag != "end_state":
             raise ValueError(
@@ -69,7 +72,11 @@ class SASParser:
         for _ in range(count):
             line = next(self.lines).split()
             goals.append((int(line[0]), int(line[1])))
-        next(self.lines)  # end_goal
+
+        check = next(self.lines).strip()
+        if check != "end_goal":
+            raise ValueError(f"Expected 'end_goal' but found '{check}'")
+
         return tuple(goals)
 
     def _parse_operator(self) -> SASOperator:
@@ -117,6 +124,11 @@ class SASParser:
             effects.append((var_id, post_val, effect_conditions))
 
         cost = int(next(self.lines))
-        next(self.lines)  # end_operator
+
+        check = next(self.lines).strip()
+        if check != "end_operator":
+            raise ValueError(
+                f"Expected 'end_operator' but found '{check}'. Check your effect parsing logic!"
+            )
 
         return SASOperator(name, cost, preconditions, effects)
