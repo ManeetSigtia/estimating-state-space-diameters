@@ -114,8 +114,6 @@ class SASParser:
             if pre_val != -1:
                 preconditions.append((var_id, pre_val))
 
-            # UPDATE: Store the effect WITH its specific conditions
-            # New Structure: (effect_var, new_value, list_of_conditions)
             effects.append((var_id, post_val, effect_conditions))
 
         cost = int(next(self.lines))
