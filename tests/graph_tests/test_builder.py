@@ -12,7 +12,7 @@ class TestSimpleSwitchGraph(unittest.TestCase):
             content = f.read()
         self.problem = SASParser().parse(content)
         self.builder = StateSpaceBuilder(self.problem)
-        self.graph = self.builder.build()
+        self.graph = self.builder.build_reachable_graph()
 
     def test_basic_structure(self):
         """Simple switch: 2 nodes (Off, On), 1 Edge (Turn On)."""
@@ -40,7 +40,7 @@ class TestGripperGraph(unittest.TestCase):
             content = f.read()
         self.problem = SASParser().parse(content)
         self.builder = StateSpaceBuilder(self.problem)
-        self.graph = self.builder.build()
+        self.graph = self.builder.build_reachable_graph()
 
     def test_reachable_states_count(self):
         """
@@ -91,6 +91,56 @@ class TestGripperGraph(unittest.TestCase):
                 break
 
         self.assertTrue(found_path, "Could not find path to goal!")
+
+
+class TestGripperCartesianGraph(unittest.TestCase):
+    """
+    Tests GRAPH B: The Cartesian Graph (Theoretical).
+    Verifies that we generate the full universe and can filter it back down.
+    """
+
+    def setUp(self):
+        file_path = get_data_file("gripper_simple.sas")
+        with open(file_path, "r") as f:
+            content = f.read()
+        self.problem = SASParser().parse(content)
+        self.builder = StateSpaceBuilder(self.problem)
+        # Build the raw 'God Mode' graph
+        self.raw_graph = self.builder.build_cartesian_graph()
+
+        # self.builder.visualize_graph(graph=self.raw_graph, initial_state=(0, 0, 0))
+
+    def test_cartesian_states_count(self):
+        """
+        Verifies strict Cartesian product:
+        Var0 (Robot) ranges [0,1] -> 2
+        Var1 (Hand)  ranges [0,1] -> 2
+        Var2 (Ball)  ranges [0,1,2] -> 3
+        Total = 2 * 2 * 3 = 12 nodes.
+        """
+        self.assertEqual(len(self.raw_graph.nodes), 12)
+
+    def test_filter_component_logic(self):
+        """
+        CRITICAL EXPERIMENT:
+        1. We take the messy 12-node graph.
+        2. We ask for the component containing Start (0,0,0).
+        3. It should return exactly the same 6 nodes as the Reachable Graph.
+
+        This proves that Graph B (Filtered) == Graph A.
+        """
+        filtered_graph = self.builder.get_main_component(self.raw_graph)
+
+        # 1. Count must match Graph A
+        self.assertEqual(len(filtered_graph.nodes), 6)
+
+        # 2. Must contain start
+        self.assertTrue(filtered_graph.has_node((0, 0, 0)))
+
+        # 3. Must NOT contain an impossible state
+        # e.g., (0, 1, 0) -> Robot A, Hand Carry, Ball A
+        # This implies hand is full but ball is still on ground. Impossible.
+        self.assertFalse(filtered_graph.has_node((0, 1, 0)))
 
 
 if __name__ == "__main__":
