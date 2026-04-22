@@ -1,0 +1,128 @@
+\chapter{Requirements, Specification, and Design}
+
+This chapter details the blueprint of the computational framework. It translates the theoretical objectives outlined in the literature review into concrete functional requirements, establishes the mathematical specifications governing data processing, and presents the Object-Oriented Design (OOD) architecture that facilitated the implementation.
+
+\section{Requirements Analysis}
+The primary objective of the project was to develop a domain-independent software tool capable of parsing automated planning models, explicating their latent state spaces, and comparatively benchmarking exact and approximate diameter algorithms. 
+
+\subsection{Functional Requirements}
+To achieve this, the system was required to fulfil the following core functionalities:
+\begin{itemize}
+    \item \textbf{Domain Parsing:} The system had to accept and sequentially parse planning domains serialized in the Fast Downward SAS+ Version 3 text format \cite{fastdownward}.
+    \item \textbf{Explicit Graph Construction (Reachability):} Starting from a defined initial state, the system was required to perform a forward-reachability traversal to generate the complete set of reachable states and valid transitions.
+    \item \textbf{Exact Diameter Computation:} The system had to implement the $O(V^3)$ Floyd-Warshall algorithm to serve as a strict baseline for exact diameter and error-bound validation on smaller graphs.
+    \item \textbf{Approximate Diameter Computation:} The system was required to implement the Aingworth combinatorial approximation \cite{aingworth96}, utilizing partial neighborhood generation and dominating sets to estimate the diameter in sub-cubic time.
+\end{itemize}
+
+\subsection{Non-Functional Requirements}
+\begin{itemize}
+    \item \textbf{Modularity and Decoupling:} The architecture required strict decoupling between the \textit{Parser} (text and AST processing) and the \textit{Solver} (graph algorithms). This ensured the mathematical engines could be tested on synthetic datasets (e.g., Erdős-Rényi graphs) independent of the SAS+ parser.
+    \item \textbf{Memory Safety Constraints:} Due to the $O(V^2)$ spatial complexity of dynamic programming approaches, the system was required to implement strict execution cutoffs (e.g., bypassing Floyd-Warshall for $|V| \geq 1000$) to prevent out-of-memory (OOM) operating system crashes during unsupervised benchmarking.
+    \item \textbf{Technology Stack:} The framework was designated to be built in Python 3.9+, leveraging the \texttt{networkx} library for underlying directed graph (\texttt{DiGraph}) data structures.
+\end{itemize}
+
+\section{Alternative Designs Considered}
+In formulating the architecture, several alternative design paradigms were evaluated and ultimately discarded to align with the core objectives of the project:
+\begin{itemize}
+    \item \textbf{Language and Graph Library:} Building the framework in C++ utilizing the Boost Graph Library was considered for its raw compiled execution speed. However, Python 3 was ultimately selected. The priority was the rapid prototyping of complex combinatorial mathematics (such as Aingworth's dominating set covers) and maintaining memory safety via lazy-loading iterators. Python's \texttt{networkx} relies on highly optimized C-backends for dictionary hashing, providing sufficient performance for sparse graphs while vastly reducing development friction.
+    \item \textbf{Parsing Methodology:} An alternative approach to processing the SAS+ format involved using Regular Expressions (Regex) to extract variables and operators. This was discarded because SAS+ is a strictly context-dependent, multi-line format with nested conditionals. Regex approaches are highly susceptible to catastrophic backtracking and poor maintainability in such environments. Instead, a Finite State Machine (FSM) utilizing sequential token ingestion was chosen for its strict predictability and lower memory footprint.
+\end{itemize}
+
+\section{Formal Specification}
+This section defines the strict mathematical and structural rules the system followed to transform raw string data into a valid topological graph.
+
+\subsection{SAS+ Data Format Specification}
+The input files strictly adhered to the Fast Downward SAS+ Version 3 standard \cite{fastdownward, sasdocs}. The system acted as a sequential processor, transitioning between contexts based on explicit token headers:
+
+\begin{itemize}
+    \item \textbf{Metric Section:}
+    \begin{itemize}
+        \item Syntax: \texttt{begin\_metric} $\to$ \texttt{<0|1>} $\to$ \texttt{end\_metric}
+        \item Semantics: A value of 0 implied unit edge weights (unweighted graph). A value of 1 implied costs were to be read from operators.
+    \end{itemize}
+    
+    \item \textbf{Variable Section:}
+    \begin{itemize}
+        \item Syntax: \texttt{begin\_variable} $\to$ \texttt{<name>} $\to$ \texttt{<layer>} $\to$ \texttt{<range>} $\to$ \texttt{<atom\_names...>} $\to$ \texttt{end\_variable}
+        \item Constraint: The layer integer represented the axiom layer; for the primary state graph, only variables were stored, though the layer was parsed for structural completeness.
+    \end{itemize}
+    
+    \item \textbf{Operator Section:}
+    \begin{itemize}
+        \item Syntax: \texttt{begin\_operator} $\to$ \texttt{<name>} $\to$ \texttt{<prevail\_count>} $\to$ \texttt{<preconditions>} $\to$ \texttt{<effect\_count>} $\to$ \texttt{<effects>} $\to$ \texttt{<cost>} $\to$ \texttt{end\_operator}
+        \item Effect Semantics: An effect was specified as a quadruple \texttt{(count, conditions, var, val)}. The transition $S \to S'$ applied $s'[var] = val$ if and only if all pairs in the conditions matched the current state $S$ \cite{saslexer}.
+    \end{itemize}
+\end{itemize}
+
+\textbf{A Note on Mutual Exclusions:} While the SAS+ format provides \texttt{begin\_mutex\_group} blocks to define sets of partial assignments that are mutually exclusive, the parser safely bypassed them. Because the system's graph construction relied entirely on forward reachability from a mathematically valid initial state, the structural invariants of the domain were inherently preserved, rendering explicit mutex evaluation redundant.
+
+\subsection{Graph Formalism and Edge Minimization}
+The target State Space Graph was formally specified as a directed graph $G = (V, E)$, implemented via the \texttt{networkx.DiGraph} library. The components were defined as follows:
+
+\begin{itemize}
+    \item $V$: The set of all unique reachable state vectors generated from $s_0$. To ensure uniqueness and compatibility with dictionary-based hashing, state vectors were strictly cast as immutable \texttt{tuple} objects.
+    \item $E$: A set of directed edges $(u, v)$ such that there existed an operator $o \in O$ where $apply(u, o) = v$. 
+\end{itemize}
+
+\textbf{Parallel Edge Minimization Rule:} In complex planning domains, it is common for multiple distinct operators to result in identical state transitions (parallel edges). To maintain a simple graph structure suitable for optimal diameter analysis, the construction process enforced a weight-minimization rule. If a transition between states $u$ and $v$ was already defined, the system updated the edge weight if and only if the new operator $o_{new}$ provided a lower cost:
+
+\[
+w(u, v) = \min(w_{existing}, \quad \text{cost}(o_{new}))
+\]
+
+This reduction was critical for the subsequent application of the Aingworth approximation and Floyd-Warshall algorithms, as it ensured the adjacency representation contained only the most efficient transitions.
+
+\subsection{Data Structure Specification}
+To ensure type safety, immutability, and memory efficiency during the generation of the state space, the domain entities were strictly specified as follows:
+
+\begin{itemize}
+    \item \textbf{State Vector:} Specified as a generic \texttt{Tuple[int, ...]}. Tuples are immutable and \textit{hashable} in Python, allowing states to safely serve as unique keys in dictionaries and persistent nodes in the \texttt{networkx} graph.
+    
+    \item \textbf{SASOperator Entity:}
+    \begin{itemize}
+        \item \texttt{name}: String identifier.
+        \item \texttt{cost}: Integer weight.
+        \item \texttt{preconditions}: List of \texttt{(var\_id, val)} tuples required for application.
+        \item \texttt{effects}: List of \texttt{(var\_id, new\_val, conditions)} tuples, where \texttt{conditions} was a nested list of secondary \texttt{(var\_id, val)} requirements.
+    \end{itemize}
+    
+    \item \textbf{SASProblem Entity:}
+    \begin{itemize}
+        \item Served as the root Abstract Syntax Tree (AST) node containing the complete static definition: \texttt{variables}, \texttt{operators}, \texttt{initial\_state}, and \texttt{goal}.
+    \end{itemize}
+\end{itemize}
+
+\section{Design and Architecture}
+To satisfy the requirements and specifications, the software was implemented using a strict modular Object-Oriented Design (OOD) pattern. As illustrated in the Unified Modeling Language (UML) class diagram (see Figure \ref{fig:uml_architecture}), the architecture enforces a clean separation of concerns, decoupling the domain parsing logic from the mathematical graph-solving engines. The system is divided into four primary subsystems.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{uml_diagram.png}
+    \caption{UML Class Diagram detailing the decoupled architecture of the parsing and solver subsystems.}
+    \label{fig:uml_architecture}
+\end{figure}
+
+\subsection{Data Transfer Objects (DTOs): \texttt{models.py}}
+To ensure type safety and immutability throughout the pipeline, the fundamental planning entities were encapsulated as Data Classes. 
+\begin{itemize}
+    \item \textbf{\texttt{SASOperator}:} Encapsulated the transition logic. Following the Information Expert principle, this class contained the \texttt{is\_applicable()} method to validate preconditions, and the \texttt{apply()} method. The \texttt{apply()} method was strictly functional; it did not mutate the input state, but rather returned a new, independent state tuple, preventing side effects during traversal.
+    \item \textbf{\texttt{SASProblem}:} Served as the Abstract Syntax Tree (AST) root, aggregating variables, operators, and the initial state.
+\end{itemize}
+
+\subsection{The Parser Subsystem: \texttt{core.py}}
+The \texttt{SASParser} class was designed as a Finite State Machine (FSM). It accepted the raw text payload and transitioned between processing contexts (e.g., parsing variables vs. operators) based on the \texttt{begin\_} tokens. It encapsulated all string manipulation and yielded a clean, structurally validated \texttt{SASProblem} DTO.
+
+\subsection{The State Space Builder: \texttt{builder.py}}
+The \texttt{StateSpaceBuilder} acted as the critical bridge between the parsed SAS+ logical model and the topological NetworkX environment.
+\begin{itemize}
+    \item \textbf{Theoretical Baseline (Cartesian Construction):} While the primary benchmarking pipeline relies exclusively on reachability, the architecture explicitly incorporates a \texttt{build\_cartesian\_graph()} method. This was designed strictly as a mathematical foil and testing artifact. By generating the complete combinatorial state space (including unreachable isolated states), it provides a rigorous baseline to empirically demonstrate the state-space explosion problem on small domains, and serves as a structural validation tool for the BFS logic during unit testing.
+    \item \textbf{Phase 1: Practical Reachability BFS:} It is imperative to distinguish the graph \textit{construction} phase from the diameter \textit{calculation} phase. The builder executed a single BFS traversal starting exclusively from the initial state $s_0$, exhaustively applying all valid operators to discover the reachable universe $V$ and transition edges $E$.
+    \item \textbf{Component Extraction:} Because diameter is undefined (or infinite) between disconnected nodes, the builder implemented a \texttt{get\_main\_component()} filter. Prior to passing the graph to the solver, this module extracted the Weakly Connected Component (WCC) containing the initial state, ensuring that the subsequent mathematical algorithms operated on a cohesive, strongly-referenced topological island.
+\end{itemize}
+
+\subsection{The Graph Solver: \texttt{diameter.py}}
+The \texttt{DiameterCalculator} module was entirely decoupled from the SAS+ domain logic, accepting only the constructed \texttt{nx.DiGraph}. This separation of concerns allowed the module to process arbitrary graph topologies (such as scale-free or random networks). 
+\begin{itemize}
+    \item It contained the exact $O(V^3)$ Floyd-Warshall implementation.
+    \item It contained the sophisticated Aingworth combinatorial approximation. All \textbf{Phase 2 BFS operations}—specifically the partial neighborhood traversals and the full dominating set traversals required to estimate the diameter—were executed within this isolated mathematical subsystem.
+\end{itemize}

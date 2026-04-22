@@ -1,0 +1,95 @@
+\chapter{Literature Review and Background}
+
+\section{Graph Diameter and the Concept of "God's Number"}
+
+\subsection{Theoretical Definitions}
+In a constructed state-space graph $G = (V, E)$, the distance $d(u, v)$ is defined as the shortest path length from state $u$ to state $v$. In the context of AI planning, these graphs are inherently \textit{directed}, meaning distance is not symmetric ($d(u, v) \neq d(v, u)$). The \textbf{eccentricity} $\epsilon(u)$ of a state $u$ is the greatest distance from $u$ to any other reachable state in the graph:
+\[
+\epsilon(u) = \max_{v \in V} d(u, v)
+\]
+The \textbf{diameter} $\Delta$ of the graph is the maximum eccentricity over all nodes, representing the "longest shortest path" in the system:
+\[
+\Delta = \max_{u \in V} \epsilon(u) = \max_{u, v \in V} d(u, v)
+\]
+This metric defines the minimum number of steps required to solve the hardest possible instance of the problem within the reachable space \cite{westGraphTheory}.
+
+\subsection{God's Number: Context from Combinatorial Puzzles}
+The term "God's Number" provides a powerful conceptual anchor for this metric. Originating from the analysis of the Rubik's Cube, it refers to the diameter of the Cayley graph of the Rubik's Cube group. It posits an omniscient solver ("God") who always finds the optimal solution; God's Number is the maximum number of moves God would ever need to solve the puzzle from any configuration \cite{mathworld}.
+
+Historical research into God's Number highlights the immense difficulty of exact diameter computation. For the Rubik's Cube ($4.3 \times 10^{19}$ states), it took thirty years of mathematical and computational effort to prove that God's Number is exactly 20 in the Half-Turn Metric \cite{siam}.
+\begin{itemize}
+    \item Early theoretical bounds were notably loose (e.g., 52 moves by Thistlethwaite).
+    \item In 2010, Rokicki et al. finally proved the tight bound of 20 by partitioning the state space into cosets and using symmetry reduction, a process that consumed 35 CPU-years of computation.
+\end{itemize}
+This historical narrative underscores that for large graphs, exact diameter computation is often impossible without massive computational resources. In the context of general AI planning, where the system lacks the specific group-theoretic symmetries of the Rubik's Cube, the reliance shifts necessarily to general-purpose algorithms.
+
+\subsection{Diameter in Formal Verification}
+In the broader context of computer science, the diameter has critical applications in Formal Verification, specifically Bounded Model Checking (BMC). BMC checks for property violations (bugs) in transition systems by unrolling the system for $k$ steps. To definitively prove that a system is safe (i.e., no bug exists), one must verify up to $k = \Delta$, a value known as the Completeness Threshold \cite{compthresh}. Because calculating the exact diameter is computationally prohibitive, verification engineers often use the Recurrence Diameter (the longest loop-free path), which acts as an over-approximation but is easier to bound symbolically using SAT solvers \cite{kroening05}.
+
+\section{Exact Computation: The Floyd-Warshall Algorithm}
+To establish a rigorous baseline for evaluating approximation algorithms, the project implemented an exact method. The \textbf{Floyd-Warshall algorithm} serves as the canonical dynamic programming solution for the All-Pairs Shortest Paths (APSP) problem \cite{finalroundFW}.
+
+\subsection{Algorithmic Mechanics}
+Floyd-Warshall iteratively improves the estimate of the shortest path between every pair of vertices $(i, j)$ by considering whether a path through an intermediate vertex $k$ is shorter than the current best-known path. Let $D^{(k)}[i][j]$ be the shortest distance from $i$ to $j$ using only vertices from $\{1, \dots, k\}$ as intermediates. The recurrence relation is defined as:
+\[
+D^{(k)}[i][j] = \min(D^{(k-1)}[i][j], \quad D^{(k-1)}[i][k] + D^{(k-1)}[k][j])
+\]
+The algorithm initializes $D^{(0)}$ based on the direct edges in the graph's adjacency matrix and iterates $k$ from $1$ to $N$.
+
+\subsection{Complexity and Limitations}
+The time complexity of Floyd-Warshall is strictly $\Theta(N^3)$, where $N$ is the number of states \cite{ecealgo}. 
+\begin{itemize}
+    \item \textbf{Time:} For a small planning graph of 1,000 states, $10^9$ operations are required, which is feasible in seconds. However, for 100,000 states, $10^{15}$ operations are required, rendering it entirely infeasible for large-scale analysis.
+    \item \textbf{Space:} The algorithm requires an $N \times N$ matrix. For 100,000 states, assuming 4-byte integers, this translates to approximately 40 GB of required RAM.
+\end{itemize}
+This cubic complexity restricts Floyd-Warshall to "toy" instances. In this project, it functioned strictly as the "ground truth" to validate the accuracy and correctness of approximation algorithms on smaller test domains.
+
+\subsection{BFS-Based All-Pairs Shortest Paths: The NetworkX Baseline}
+Given the cubic bottleneck of Floyd-Warshall, practical exact diameter computations on sparse, unweighted graphs frequently rely on an alternative approach: executing a Breadth-First Search (BFS) from every single vertex. Because a single BFS traversal resolves in $O(|V| + |E|)$ time, running it across all $V$ vertices yields a total algorithmic complexity of $O(|V|(|V| + |E|))$. 
+
+In the context of automated planning and scale-free networks, state-space graphs are typically highly sparse (where $|E|$ is proportionally close to $|V|$). Consequently, this BFS-based approach effectively operates near $O(|V|^2)$, offering massive computational savings over Floyd-Warshall's rigid $\Theta(|V|^3)$ matrix operations. Within this project, the exact BFS methodology provided by the \texttt{networkx} library was utilized to benchmark against the Aingworth approximation, serving as the primary baseline for instances where Floyd-Warshall exhausted available memory.
+
+\section{Combinatorial Approximation: The Aingworth Algorithm}
+The centerpiece of the advanced algorithmic implementation in this project is the method proposed by Aingworth et al. \cite{aingworth96}. This algorithm represented a breakthrough in combinatorial diameter approximation, offering a provable error bound alongside a runtime significantly faster than APSP.
+
+\subsection{The Approximation Guarantee}
+For the computation of graph diameter, the Aingworth algorithm provides an estimate $E$ for the true diameter $\Delta$ that satisfies a bounded multiplicative error:
+\[
+\lfloor 2/3 \Delta \rfloor \le E \le \Delta
+\]
+This "2/3-approximation" mathematically guarantees that the estimated diameter will be at least two-thirds of the actual maximum diameter of the graph, entirely bypassing the need for an exact APSP computation.
+
+\subsection{Algorithm Logic}
+The algorithm operates on the intuition that calculating APSP is inefficient because the vast majority of node pairs are irrelevant to the maximum diameter. It instead focuses on finding "long" paths by identifying a small set of "landmark" nodes that effectively cover the graph's topology.
+\begin{enumerate}
+    \item \textbf{Parameter Selection:} A threshold parameter $s$ is selected (optimally $s = \sqrt{n \log n}$) to define the required "neighborhood size."
+    \item \textbf{Partial BFS:} For every vertex $v$, a Partial Breadth-First Search (BFS) is executed. It terminates as soon as it has visited $s$ distinct nodes, defining a partial neighborhood $P(v)$.
+    \item \textbf{Identifying the "Long" Neighborhood:} The algorithm identifies the vertex $w$ that exhibits the maximum partial radius. A large partial radius implies that $w$ resides in a sparse, linear, or elongated region of the graph, making it a high-probability candidate for a diameter endpoint.
+    \item \textbf{Dominating Set Construction:} A greedy set-cover algorithm is employed to construct a Dominating Set $D$, ensuring that every partial neighborhood $P(v)$ contains at least one node from $D$. The size of this covering set is strictly bounded by $O(\frac{n \log n}{s})$.
+    \item \textbf{Full Traversal:} Full BFS runs are executed from $w$, from all nodes within the neighborhood $P(w)$, and from all nodes in the dominating set $D$. The estimated diameter $E$ is the maximum eccentricity discovered during these specific runs.
+\end{enumerate}
+
+\subsection{Domain Adaptation: Directed vs. Undirected Graphs}
+A critical architectural consideration in this project was the structural nature of the graph edges. The original Aingworth paper mathematically proved its bounds assuming an undirected graph structure, where path distances are strictly symmetric. 
+
+Certain benchmarking datasets evaluated in this project—such as Erdős-Rényi random graphs or scale-free social collaboration networks (e.g., \texttt{cond-mat})—exhibit natural undirected symmetry. Furthermore, isolated planning puzzles (like the Blocks World) often feature reversible operators. However, general AI planning frequently involves strictly irreversible actions. Benchmarked domains within this project, such as \texttt{rover} and \texttt{zenotravel}, enforce asymmetric transitions due to monotonic resource consumption (e.g., fuel or battery depletion). 
+
+Because this framework is designed as a generalized, domain-independent analytical tool, it cannot safely assume undirected symmetry across all inputs. Naively converting asymmetric state spaces to undirected graphs would violate the physical constraints of planning domains by allowing algorithms to mathematically travel "backward" through non-reversible actions. Therefore, this project standardized the architecture to operate entirely on directed graphs (\texttt{nx.DiGraph}).
+
+\subsection{Complexity Analysis}
+The runtime of the algorithm is dominated by the BFS operations. By carefully balancing the computational cost of the partial searches against the required number of full searches via the parameter $s$, the optimal theoretical runtime is bounded at $\tilde{O}(m\sqrt{n})$ \cite{aingworth96}. For a graph with 100,000 nodes, where Floyd-Warshall requires $10^{15}$ operations, the Aingworth approximation requires approximately $1.5 \times 10^8$ operations. This dramatic algorithmic speedup enables the rigorous topological analysis of state spaces that were previously deemed mathematically inaccessible.
+
+\section{Heuristics and Exact Pruning: Contextualizing the Project}
+While this project prioritized the adapted Aingworth approximation, it is vital to contextualize it against alternative diameter calculation approaches currently utilized in the field.
+
+\subsection{Bi-directional Search}
+A standard heuristic for finding shortest paths is Bi-directional BFS, which searches simultaneously from a source node and a target node. While highly effective for point-to-point single-pair queries, applying this methodology to the all-pairs problem to discover the maximum diameter does not improve the worst-case asymptotic complexity compared to standard BFS approaches \cite{westGraphTheory}.
+
+\subsection{Iterative Fringe Upper Bound (iFUB)}
+A prominent alternative for exact diameter computation is the Iterative Fringe Upper Bound (iFUB) algorithm. Unlike Floyd-Warshall, iFUB successfully avoids computing the entire distance matrix. Instead, it operates through aggressive pruning:
+\begin{itemize}
+    \item It establishes a strict lower bound using a fast heuristic (e.g., the 4-Sweep method).
+    \item It iteratively processes vertices, sorting them by their expected eccentricity.
+    \item It skips the costly BFS traversal for any vertex that cannot possibly exceed the current maximum known diameter.
+\end{itemize}
+In practice, iFUB performs exceptionally well on real-world social networks \cite{ifub}. However, its worst-case complexity remains bounded at $O(nm)$. This stands in direct contrast to the Aingworth methodology implemented in this framework, which offers a strict theoretical runtime bound of $\tilde{O}(m\sqrt{n})$. This project, therefore, focused explicitly on the trade-off offered by Aingworth: accepting a bounded multiplicative error in exchange for a runtime guarantee that remains computationally immune to the pathological graph topologies that frequently stall exact heuristic solvers.

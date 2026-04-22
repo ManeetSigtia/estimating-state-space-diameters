@@ -1,0 +1,61 @@
+\chapter{Introduction}
+
+The determination of distance metrics within graph structures stands as one of the most fundamental challenges in computer science and combinatorial optimization \cite{graphsurvey}. In the realm of artificial intelligence, this challenge manifests acutely in the field of automated planning. At its core, planning involves the synthesis of a sequence of actions that transforms a system from a defined initial state to a state satisfying specific goal conditions \cite{saarland}. 
+
+While this formulation appears conceptually elegant, the computational realization in large-scale systems is governed by the \textbf{state-space explosion} problem. The implicit graph defined by a system's operators, in which nodes represent unique states and directed edges represent valid transitions, can grow exponentially with the problem size \cite{decoupled}. A critical property of this graph is its \textbf{diameter} ($\Delta$), defined as the maximum eccentricity among all vertices, or the longest shortest path between any pair of reachable nodes. 
+
+In the context of combinatorial puzzles like the Rubik's Cube, this value is colloquially known as 'God's Number,' the maximum number of moves required to solve the puzzle from any valid starting configuration \cite{mathworld}. Determining this number exactly is often a PSPACE-complete task. While theoretical definitions are straightforward, their computational realization presents a complex landscape of trade-offs between accuracy, time complexity, and memory efficiency \cite{stanfordLec}. This project investigated these trade-offs by developing a robust computational framework to parse planning domains, explicitly construct their state spaces, and comparatively evaluate exact and approximate algorithms for diameter estimation.
+
+\section{The SAS+ Planning Formalism: Theory and Representation}
+To perform this analysis, the system first had to interpret the domain representation. The history of automated planning is intrinsically linked to the evolution of these representations \cite{saarland}.
+
+\subsection{From Boolean Propositions to Multi-Valued Variables}
+The classical STRIPS formalism, developed in the early 1970s, modeled the world using a set of binary (Boolean) propositions that could be either true or false. A state was defined by the set of atoms that were currently true. While conceptually simple, STRIPS suffered from a lack of structural explicitness. For instance, in a "Blocks World" domain, a block $A$ can be on block $B$, on block $C$, or on the table. In STRIPS, this would be represented by independent atoms \texttt{on(A, B)}, \texttt{on(A, C)}, and \texttt{on(A, Table)}. There was nothing in the strict syntax of STRIPS to prevent a state where both \texttt{on(A, B)} and \texttt{on(A, C)} were true simultaneously, even though this is physically impossible. This lack of structural constraints forces planners to explore a larger search space containing invalid states, or requires the addition of numerous negative preconditions to operators to enforce consistency \cite{saarland}.
+
+The SAS+ formalism addresses this limitation by moving from binary propositions to multi-valued state variables \cite{backstrom93}. In the SAS+ paradigm, the position of block $A$ is modeled as a single variable, \texttt{pos(A)}, with a finite domain of mutually exclusive values $D_{pos(A)} = \{\texttt{on(B)}, \texttt{on(C)}, \texttt{Table}\}$. By definition, the variable \texttt{pos(A)} can hold only one value at a time. This implicitly enforces structural mutual exclusion constraints. The transition to SAS+ is not merely syntactic sugar; it fundamentally alters the connectivity and structure of the causal graph, rendering the problem more amenable to efficient parsing and search.
+
+\subsection{Formal Definition and Action Executability}
+Formally, a SAS+ planning task is defined as a tuple $\Pi = \langle V, O, s_0, s_g \rangle$ \cite{saarland, fastdownward}:
+\begin{itemize}
+    \item $V = \{v_1, \dots, v_n\}$ is a set of state variables, where each variable $v_i$ is associated with a finite domain $D_{v_i}$.
+    \item $s_0$ is the initial state, representing a complete assignment that maps every variable $v \in V$ to a value in $D_v$.
+    \item $s_g$ is the goal, defined as a partial assignment to a subset of variables in $V$.
+    \item $O$ is a set of operators. Each operator $o \in O$ is defined by a tuple $\langle \text{pre}(o), \text{eff}(o), \text{cost}(o) \rangle$.
+\end{itemize}
+
+The $\text{pre}(o)$ denotes the set of preconditions, which are partial assignments $\{(v, d) \mid v \in V, d \in D_v\}$ that must hold for the operator to be applicable. The $\text{eff}(o)$ represents a set of conditional effects. Each effect is a triple $\langle \text{cond}, v, d' \rangle$, where $\text{cond}$ is a (possibly empty) set of additional partial assignments required for the effect to trigger, and $v := d'$ is the resulting assignment.
+
+State transitions are governed by strict invariants. An operator $o \in O$ is \textit{applicable} in a state $s$ if and only if the state satisfies all global preconditions:
+$$ \forall (v, d) \in \text{pre}(o), \quad s[v] = d $$
+
+Upon execution of an applicable operator $o$, a successor state $s'$ is generated. The value of each variable $v$ in $s'$ is determined as follows:
+\begin{equation}
+s'[v] = 
+\begin{cases} 
+d' & \text{if } \exists \langle \text{cond}, v, d' \rangle \in \text{eff}(o) \text{ such that } s \text{ satisfies } \text{cond} \\
+s[v] & \text{otherwise}
+\end{cases}
+\end{equation}
+
+This rigorous formulation ensures that the reachability analysis safely explores the state space. By deriving $s'$ directly from the operator's logical definition, the system maintains state consistency without requiring external heuristic validation.
+
+\section{Algorithmic Challenges: The Cubic Barrier}
+Once the implicit SAS+ state space is explicitly constructed, analyzing its diameter remains computationally fraught. The classical approach involves solving the All-Pairs Shortest Paths (APSP) problem using the exact Floyd-Warshall algorithm, which carries a time complexity of $O(n^3)$ \cite{ecealgo}. For a planning domain with even a modest 100,000 states, $n^3$ operations correspond to $10^{15}$ computations, rendering the exact dynamic programming approach intractable.
+
+This scalability crisis has bifurcated research into two primary directions: algebraic algorithms utilizing fast matrix multiplication, and combinatorial approximation algorithms. Algebraic approaches, such as Seidel’s algorithm, theoretically reduce the complexity to $O(n^{\omega} \log n)$, where $\omega < 2.373$ is the exponent of matrix multiplication. However, these methods operate on the adjacency matrix as a numerical entity, often requiring complex ring operations and incurring such massive hidden constant factors that they are frequently deemed "notoriously impractical" for real-world implementation \cite{cmuSeidel}.
+
+Consequently, modern algorithm engineering often shifts toward combinatorial approximations. These methods, exemplified by the Aingworth algorithm, accept a bounded multiplicative error (a 2/3 approximation guarantee) in exchange for runtime bounds that are strictly sub-cubic, specifically $\tilde{O}(m\sqrt{n})$ \cite{aingworth96}. Recent advances continue to push these boundaries \cite{arxiv2025}, but Aingworth remains a seminal baseline. This project investigated these trade-offs by implementing and contrasting these methodologies, bridging theoretical bounds with the practical domain of automated planning to benchmark the precise performance delta between theoretical exactness and bounded heuristic approximation.
+
+\section{The Fast Downward Translator Output}
+To operationalize this analysis, the project utilized the SAS+ Version 3 format generated by the Fast Downward planning system \cite{fastdownward, sasdocs}. This text-based format serializes the formal tuple $\Pi$ into distinct executable sections. The implemented parser extracted the \texttt{begin\_metric} flags to identify edge costs, the \texttt{begin\_variable} blocks to define state dimensions, and the \texttt{begin\_operator} sequences to construct the transition logic. By processing this formalism, the system seamlessly bridged standardized automated planning environments with customized topological graph analysis.
+
+\section{Report Structure}
+The remainder of this report is structured as follows:
+\begin{itemize}
+    \item \textbf{Chapter 2: Literature Review and Background} explores the theoretical underpinnings of graph diameter, the history of "God's Number," and the foundational mechanics of the Floyd-Warshall and Aingworth algorithms.
+    \item \textbf{Chapter 3: Requirements and Specification} details the functional objectives, architectural constraints, and the formal mathematical modeling of the state-space builder.
+    \item \textbf{Chapter 4: Implementation} discusses the practical realization of the object-oriented design, detailing the abstract syntax tree parsing and the adaptation of the Aingworth methodology for directed graphs.
+    \item \textbf{Chapter 5: Results and Evaluation} presents a rigorous empirical analysis of the exact and approximate algorithms across five specialized graph topologies, evaluating time complexity, memory utilization, and error bounds.
+    \item \textbf{Chapter 6: Professional, Legal, and Ethical Issues} examines the broader implications of large-scale computational processes, including sustainability and algorithmic efficiency.
+    \item \textbf{Chapter 7: Conclusions and Future Work} synthesizes the core findings of the project and outlines potential architectural and algorithmic extensions.
+\end{itemize}

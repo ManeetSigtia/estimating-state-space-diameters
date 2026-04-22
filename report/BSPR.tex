@@ -1,0 +1,520 @@
+\documentclass[12pt,a4paper]{report}
+
+% ====== PACKAGES ======
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{setspace}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{tocloft}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{url}
+
+% ====== PAGE GEOMETRY ======
+\geometry{
+  a4paper,
+  left=25mm,
+  right=25mm,
+  top=25mm,
+  bottom=25mm
+}
+
+% ====== HYPERREF SETUP ======
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  citecolor=black,
+  pdfauthor={Your Name},
+  pdftitle={Background and Specification Progress Report}
+}
+
+% ====== TITLE DATA ======
+\title{\textbf{Algorithmic Frameworks for Exact and Approximate Diameter Computation}}
+\author{Your Name}
+\date{\today}
+
+% ====== BEGIN DOCUMENT ======
+\begin{document}
+
+% ----------------------------------------------------
+% COVER PAGE
+% ----------------------------------------------------
+\begin{titlepage}
+  \centering
+  \vspace*{1cm}
+  
+  {\LARGE \textbf{King's College London} \\[2cm]}
+
+  {\Huge \textbf{Background and Specification Progress Report}\\[1cm]}
+
+  {\Large Algorithmic Frameworks for Exact and Approximate Diameter Computation in Large-Scale State Space Graphs\\[2cm]}
+
+  \vfill
+
+  {\Large Author: Maneet Sigtia\\}
+  {\Large Supervisor: Dr Mohammad Abdulaziz\\}
+  {\large Student ID: K22006576 \\[1cm]}
+  {\large \today}
+\end{titlepage}
+
+\pagenumbering{roman}
+
+% ----------------------------------------------------
+% TABLE OF CONTENTS
+% ----------------------------------------------------
+\tableofcontents
+\clearpage
+
+\pagenumbering{arabic}
+
+% ----------------------------------------------------
+% 1. BACKGROUND AND CONTEXT
+% ----------------------------------------------------
+\chapter{Background and Context}
+
+\section{The Computational Landscape of Automated Planning}
+The determination of distance metrics within graph structures stands as one of the most fundamental challenges in computer science and combinatorial optimization \cite{graphsurvey}. In the realm of artificial intelligence, this challenge manifests acutely in the field of automated planning. At its core, planning involves the synthesis of a sequence of actions—a plan—that transforms a system from a defined initial state to a state satisfying specific goal conditions \cite{saarland}.
+
+While this formulation appears conceptually elegant, the computational realization in large-scale systems is governed by the \textbf{state-space explosion} problem. The implicit graph defined by a system's operators—where nodes represent unique states and edges represent valid transitions—can grow exponentially with the problem size \cite{decoupled}. A critical property of this graph is its \textbf{diameter} ($\Delta$), defined as the maximum eccentricity among all vertices, or the longest shortest path between any pair of nodes.
+
+In the context of combinatorial puzzles like the Rubik's Cube, this value is colloquially known as "God's Number"—the maximum number of moves required to solve the puzzle from any valid starting configuration \cite{mathworld}. Determining this number exactly is often a PSPACE-complete task. While theoretical definitions are straightforward, their computational realization presents a complex landscape of trade-offs between accuracy, time complexity, and memory efficiency \cite{stanfordLec}.
+
+\section{The SAS+ Planning Formalism: Theory and Representation}
+To perform this analysis, one must first interpret the domain representation. The history of automated planning is intrinsically linked to the evolution of these representations \cite{saarland}.
+
+\subsection*{From Propositional Logic to Multi-Valued Variables}
+The classical STRIPS formalism, developed in the early 1970s, modeled the world using a set of binary propositions (atoms) that could be either true or false. A state was defined by the set of atoms that were currently true. While conceptually simple, STRIPS suffers from a lack of structural explicitness. For instance, in a "Blocks World" domain, a block $A$ can be on block $B$, on block $C$, or on the table. In STRIPS, this would be represented by atoms \texttt{on(A, B)}, \texttt{on(A, C)}, and \texttt{on(A, Table)}. There is nothing in the syntax of STRIPS to prevent a state where both \texttt{on(A, B)} and \texttt{on(A, C)} are true, even though this is physically impossible. This lack of structural constraints forces planners to explore a larger search space containing invalid states, or requires the addition of numerous negative preconditions to operators to enforce consistency \cite{saarland}.
+
+The SAS+ formalism addresses this limitation by moving from binary propositions to multi-valued state variables \cite{backstrom93}. In the SAS+ paradigm, the position of block $A$ is modeled as a single variable, \texttt{pos(A)}, with a finite domain of mutually exclusive values $D_{pos(A)} = \{\texttt{on(B)}, \texttt{on(C)}, \texttt{Table}\}$. By definition, the variable \texttt{pos(A)} can hold only one value at a time. This implicitly enforces the mutual exclusion (mutex) constraints that STRIPS must handle explicitly or ignore. The transition to SAS+ is not merely a syntactic sugar; it fundamentally alters the connectivity and structure of the causal graph, often rendering the problem more amenable to heuristic search.
+
+\subsection*{Formal Definition}
+Formally, a SAS+ planning task is defined as a tuple $\Pi = \langle V, O, s_0, s_g \rangle$ \cite{saarland, fastdownward}:
+\begin{itemize}
+    \item $V = \{v_1, \dots, v_n\}$ is a set of state variables. Each variable $v_i$ is associated with a finite domain $D_{v_i}$.
+    \item $O$ is a set of operators (actions). Each operator $o \in O$ is defined by a tuple $\langle \text{pre}(o), \text{eff}(o) \rangle$.
+    \item $\text{pre}(o)$ is a set of partial assignments $\{(v, d) \mid v \in V, d \in D_v\}$ representing the preconditions required for the operator to be applicable.
+    \item $\text{eff}(o)$ is a set of partial assignments representing the changes to the state variables upon execution of the operator.
+    \item $s_0$ is the initial state, a complete assignment mapping every variable $v \in V$ to a value in $D_v$.
+    \item $s_g$ is the goal, a partial assignment to a subset of variables in $V$, specifying the conditions that must be met for the plan to be successful.
+\end{itemize}
+
+The efficiency gains of SAS+ are significant. By reducing the number of state bits required to represent a valid world state and by encoding mutex constraints directly into the variable definitions, SAS+ reduces the branching factor of the search and allows for the construction of more informative heuristics, such as the causal graph heuristic used in the Fast Downward planning system \cite{fastdownward}.
+
+\section{Algorithmic Challenges: The Cubic Barrier}
+Once the implicit SAS+ graph is explicated, the computational landscape for diameter analysis remains fraught with bottlenecks. The classical approach involves solving the All-Pairs Shortest Paths (APSP) problem using the Floyd-Warshall algorithm, which offers an exact solution with a time complexity of $O(n^3)$ \cite{ecealgo}.
+
+For a planning domain with even a modest 100,000 states, $n^3$ operations correspond to $10^{15}$ computations, rendering the approach intractable for practical applications. This scalability crisis has bifurcated research into two primary directions: algebraic algorithms utilizing fast matrix multiplication, and combinatorial approximation algorithms \cite{siam}.
+
+Algebraic approaches, such as Seidel’s algorithm, theoretically reduce the complexity to $O(n^{\omega} \log n)$, where $\omega < 2.373$ is the exponent of matrix multiplication. However, these methods operate on the adjacency matrix as a numerical entity, often requiring complex ring operations and incurring such massive hidden constant factors that they are frequently deemed "notoriously impractical" for real-world implementation \cite{cmuSeidel}.
+
+Consequently, the focus of this project—and a significant portion of modern algorithm engineering—shifts toward combinatorial approximations. These methods, exemplified by the Aingworth algorithm, accept a bounded error (either additive or multiplicative) in exchange for runtime bounds that are strictly sub-cubic, such as $\tilde{O}(n^{2.5})$ or $O(m\sqrt{n})$ \cite{aingworth96}. Recent advances continue to push these boundaries \cite{arxiv2025}, but Aingworth remains a seminal baseline. This project aims to bridge these algorithmic theories with the practical domain of automated planning by implementing a system capable of parsing, constructing, and analyzing these state-space graphs.
+
+\section{The Fast Downward Translator Output}
+To operationalize this analysis, the project interfaces with the SAS+ Version 3 format generated by the Fast Downward planning system \cite{fastdownward, sasdocs}. This flat, text-based format serializes the formal tuple $\Pi$ into distinct sections:
+
+\begin{itemize}
+    \item \textbf{Metric Section:} Defines whether the graph is weighted or unweighted. A value of 1 implies operator costs must be respected, while 0 implies unit costs, allowing for standard Breadth-First Search (BFS) traversals.
+    \item \textbf{Variables Section:} Defines the state vector dimensions ($V$). Each variable includes a "range" (domain size) and an "axiom layer".
+    \item \textbf{Operator Section:} Enumerates the transitions ($O$). Crucially, the parser must handle conditional effects, where an effect on a variable only triggers if specific secondary conditions are met in the current state.
+\end{itemize}
+
+By parsing this formalism and converting the implicit transition rules into an explicit graph data structure, the system enables the rigorous topological analysis of planning domains.
+
+% ----------------------------------------------------
+% 2. LITERATURE REVIEW
+% ----------------------------------------------------
+\chapter{Literature Review and Theoretical Framework}
+
+\section{Graph Diameter and the Concept of "God's Number"}
+
+\subsection{Theoretical Definitions}
+In the constructed state graph $G(V, E)$, the distance $d(u, v)$ is defined as the shortest path length from state $u$ to state $v$. The \textbf{eccentricity} $\epsilon(u)$ of a state $u$ is the greatest distance from $u$ to any other reachable state in the graph:
+\[
+\epsilon(u) = \max_{v \in V} d(u, v)
+\]
+The \textbf{diameter} $\Delta$ of the graph is the maximum eccentricity over all nodes, representing the "longest shortest path" in the system:
+\[
+\Delta = \max_{u \in V} \epsilon(u) = \max_{u, v \in V} d(u, v)
+\]
+This metric defines the minimum number of steps required to solve the hardest possible instance of the problem within the reachable space \cite{westGraphTheory}.
+
+\subsection{God's Number: Context from Combinatorial Puzzles}
+The term "God's Number" provides a powerful conceptual anchor for this metric. Originating from the analysis of the Rubik's Cube, it refers to the diameter of the Cayley graph of the Rubik's Cube group. It posits an omniscient solver ("God") who always finds the optimal solution; God's Number is the maximum number of moves God would ever need \cite{mathworld}.
+
+Research into God's Number highlights the immense difficulty of diameter computation. For the Rubik's Cube ($4.3 \times 10^{19}$ states), it took thirty years of mathematical and computational effort to prove that God's Number is exactly 20 in the Half-Turn Metric \cite{siam}.
+\begin{itemize}
+    \item Early bounds were loose (e.g., 52 by Thistlethwaite).
+    \item In 2010, Rokicki et al. finally proved the bound of 20 by partitioning the state space into cosets and using symmetry reduction, consuming 35 CPU-years of computation.
+\end{itemize}
+This historical narrative underscores that for large graphs, exact diameter computation is often impossible without massive resources. In the context of general AI planning, where we lack the specific group-theoretic symmetries of the Rubik's Cube, we must rely on general-purpose algorithms.
+
+\subsection{Diameter in Formal Verification}
+In the broader context of computer science, the diameter has critical applications in Formal Verification, specifically Bounded Model Checking (BMC). BMC checks for property violations (bugs) in transition systems by unrolling the system for $k$ steps. To definitively prove that a system is safe (i.e., no bug exists), one must verify up to $k = \Delta$, a value known as the Completeness Threshold \cite{compthresh}. Because calculating the exact diameter is hard, verification engineers often use the Recurrence Diameter (the longest loop-free path), which is an over-approximation but easier to bound symbolically using SAT solvers \cite{kroening05}.
+
+\section{Exact Computation: The Floyd-Warshall Algorithm}
+To establish a baseline for evaluating approximation algorithms, one must implement an exact method. The \textbf{Floyd-Warshall algorithm} is the canonical dynamic programming solution for the All-Pairs Shortest Paths (APSP) problem \cite{finalroundFW}.
+
+\subsection{Algorithmic Mechanics}
+Floyd-Warshall iteratively improves the estimate of the shortest path between every pair of vertices $(i, j)$ by considering whether a path through an intermediate vertex $k$ is shorter than the current best known path. Let $D^{(k)}[i][j]$ be the shortest distance from $i$ to $j$ using only vertices from $\{1, \dots, k\}$ as intermediates. The recurrence relation is:
+\[
+D^{(k)}[i][j] = \min(D^{(k-1)}[i][j], \quad D^{(k-1)}[i][k] + D^{(k-1)}[k][j])
+\]
+The algorithm initializes $D^{(0)}$ based on the direct edges in the graph (adjacency matrix) and iterates $k$ from $1$ to $N$.
+
+\subsection{Complexity and Limitations}
+The time complexity is strictly $\Theta(N^3)$, where $N$ is the number of states \cite{ecealgo}.
+\begin{itemize}
+    \item \textbf{Time:} For a small planning graph of 1,000 states, $10^9$ operations are required—feasible in seconds. However, for 100,000 states, $10^{15}$ operations are required—infeasible for a standard project.
+    \item \textbf{Space:} The algorithm requires an $N \times N$ matrix. For 100,000 states, assuming 4-byte integers, this requires $\approx 40$ GB of RAM.
+\end{itemize}
+This cubic complexity makes Floyd-Warshall useful only for "toy" instances. It serves as the "ground truth" to validate the correctness of approximation algorithms on small graphs.
+
+\section{Combinatorial Approximation: The Aingworth Algorithm}
+The centerpiece of the advanced algorithmic implementation is the method proposed by Aingworth et al. \cite{aingworth96}. This algorithm represents a breakthrough in combinatorial diameter approximation, offering a provable error bound with a runtime significantly faster than APSP.
+
+\subsection{The Approximation Guarantee}
+The algorithm provides an estimate $E$ for the diameter $\Delta$ such that:
+\[
+\lfloor 2/3 \Delta \rfloor \le E \le \Delta
+\]
+This is a "2/3-approximation," guaranteeing that the estimated diameter is at least two-thirds of the actual diameter.
+
+\subsection{Algorithm Logic}
+The algorithm operates on the intuition that calculating APSP is wasteful because most pairs are irrelevant to the diameter. It focuses on finding "long" paths by identifying a small set of "landmark" nodes that cover the graph effectively.
+\begin{enumerate}
+    \item \textbf{Parameter Selection:} A parameter $s$ is selected (optimally $s = \sqrt{n \log n}$) to define the "neighborhood size."
+    \item \textbf{Partial BFS:} For every vertex $v$, a Partial BFS is run that terminates as soon as it has visited $s$ distinct nodes. This defines a partial neighborhood $P(v)$.
+    \item \textbf{Identifying the "Long" Neighborhood:} The algorithm identifies the vertex $w$ that has the maximum partial radius. A large partial radius implies $w$ resides in a sparse or linear region of the graph, making it a strong candidate for a diameter endpoint.
+    \item \textbf{Dominating Set Construction:} A greedy set-cover algorithm constructs a Dominating Set $D$ such that every partial neighborhood $P(v)$ contains at least one node from $D$. The size of this set is bounded by $O(\frac{n \log n}{s})$.
+    \item \textbf{Full BFS Traversals:} Full BFS runs are executed from $w$, the neighborhood $P(w)$, and the dominating set $D$. The estimated diameter is the maximum eccentricity found in these runs.
+\end{enumerate}
+
+\subsection{Complexity Analysis}
+The runtime is dominated by the BFS operations. Balancing the cost of partial searches against the number of full searches yields an optimal runtime of $\tilde{O}(m\sqrt{n})$ \cite{aingworth96}. For a graph with 100,000 nodes, where Floyd-Warshall requires $10^{15}$ operations, the Aingworth algorithm requires approximately $1.5 \times 10^8$ operations. This dramatic speedup enables the analysis of state spaces that were previously inaccessible.
+
+\section{Heuristics and Exact Pruning: Contextualizing the Project}
+While this project focuses on the Aingworth approximation, it is important to acknowledge alternative approaches used in the field for diameter calculation.
+
+\subsection*{Bi-directional Search}
+A standard heuristic for finding shortest paths is Bi-directional BFS, which searches simultaneously from the source and target. While effective for single-pair queries, applying this to the all-pairs problem to find the diameter does not improve the worst-case asymptotic complexity compared to standard BFS approaches \cite{westGraphTheory}.
+
+\subsection*{Iterative Fringe Upper Bound (iFUB)}
+A prominent alternative for exact diameter computation is the Iterative Fringe Upper Bound (iFUB) algorithm. Unlike Floyd-Warshall, iFUB avoids computing the entire distance matrix. Instead, it operates by pruning:
+\begin{itemize}
+    \item It establishes a lower bound using a heuristic (e.g., 4-Sweep).
+    \item It iterates through vertices, sorting them by expected eccentricity.
+    \item It skips the costly BFS for any vertex that cannot possibly exceed the current maximum diameter found.
+\end{itemize}
+In practice, iFUB is often very fast on real-world social networks \cite{ifub}. However, its worst-case complexity remains $O(nm)$. This stands in contrast to the \textbf{Aingworth algorithm} selected for this project, which offers a strict theoretical runtime bound of $\tilde{O}(n^{2.5})$ \cite{aingworth96}. This project therefore focuses on the trade-off offered by Aingworth: accepting a bounded additive error in exchange for a runtime guarantee that is immune to the pathological graph topologies that might stall heuristic exact solvers.
+
+% ----------------------------------------------------
+% 3. REQUIREMENTS
+% ----------------------------------------------------
+\chapter{Requirements}
+The objective of this project is to develop a computational framework capable of parsing SAS+ planning instances, constructing their explicit state-space graphs, and analyzing their diameter using both exact and approximation algorithms.
+
+\section{Functional Requirements}
+
+\subsection{SAS+ Parsing Subsystem}
+\begin{itemize}
+    \item The system must accept input files in the \textbf{Fast Downward SAS+ Version 3} format \cite{fastdownward}.
+    \item It must correctly parse the \texttt{begin\_version} block to validate compatibility.
+    \item It must extract \texttt{begin\_variable} blocks to define the state vector dimensions.
+    \item It must extract \texttt{begin\_operator} blocks, correctly handling \textbf{conditional effects} (secondary effects that trigger only if specific variable conditions are met) \cite{saslexer}.
+    \item The system must parse \texttt{begin\_mutex\_group} blocks to capture mutual exclusion constraints. These groups list facts that cannot simultaneously be true, providing structural invariants that are essential for validating state consistency \cite{backstrom93}.
+    \item It must identify the \texttt{begin\_metric} flag to determine if the graph is weighted or unweighted.
+\end{itemize}
+
+\subsection{State Space Construction}
+\begin{itemize}
+    \item The system must implement a \textbf{Reachability Analysis} module. Starting from the initial state $s_0$, it must perform a traversal (BFS) to generate all reachable states $V$ and transitions $E$.
+    \item The system must handle \textbf{duplicate states} efficiently to ensure the graph contains no redundant nodes.
+    \item It must support directed edges, as planning operators are not necessarily reversible \cite{saarland}.
+\end{itemize}
+
+\subsection{Algorithmic Implementation}
+\begin{itemize}
+    \item \textbf{Exact Solver:} The system must implement the \textbf{Floyd-Warshall algorithm} to compute the exact diameter. This will serve as the ground truth for small instances ($N < 2000$).
+    \item \textbf{Approximation Solver:} The system must implement the \textbf{Aingworth algorithm}. This includes:
+    \begin{itemize}
+        \item An efficient neighborhood search to generate partial neighborhoods $P(v)$.
+        \item A greedy set-cover logic to construct the dominating set $D$.
+        \item A bounded BFS traversal mechanism to estimate the diameter with an additive error of 2 \cite{aingworth96}.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Reporting and Analysis}
+\begin{itemize}
+    \item The system must output the calculated diameter (or bounds) and the wall-clock execution time for both algorithms.
+    \item It must report graph statistics, including the total number of nodes $|V|$ and edges $|E|$.
+\end{itemize}
+
+\section{Non-Functional Requirements}
+
+\subsection{Technology Stack}
+The system will be implemented in \textbf{Python 3.9+}.
+\begin{itemize}
+    \item \textbf{Graph Library:} The \texttt{networkx} library will be used for graph data structures (\texttt{DiGraph}) to leverage its optimized adjacency representations.
+    \item \textbf{Type Safety:} The codebase must utilize Python's \texttt{typing} module and \texttt{dataclasses} to ensure strict data modeling and reduce runtime errors \cite{pythonAST}.
+\end{itemize}
+
+\subsection{Modularity}
+The architecture must strictly decouple the \textbf{Parser} (text processing) from the \textbf{Solver} (graph algorithms). This allows the algorithms to be tested on synthetic graphs (e.g., random grids) independent of the SAS+ parser.
+
+\subsection{Scalability}
+The Aingworth implementation must be capable of processing graphs significantly larger than those processable by Floyd-Warshall (e.g., $N > 10,000$) within reasonable memory limits.
+
+\section{Data Requirements}
+\begin{itemize}
+    \item \textbf{Input:} \texttt{.sas} files generated by the Fast Downward translator \cite{fastdownward}.
+    \item \textbf{Output:} Console output or log files detailing the Graph Order ($|V|$), Size ($|E|$), calculated diameter, and runtime in seconds.
+\end{itemize}
+
+% ----------------------------------------------------
+% 4. SPECIFICATION
+% ----------------------------------------------------
+\chapter{Specification}
+This section provides the formal specification for the data structures and algorithms, serving as the blueprint for implementation.
+
+\section{SAS+ Data Format Specification}
+The input file strictly follows the Fast Downward SAS+ Version 3 standard \cite{fastdownward, sasdocs}. The system acts as a sequential processor that transitions between contexts based on token headers.
+
+\begin{itemize}
+    \item \textbf{Metric Section:}
+    \begin{itemize}
+        \item Syntax: \texttt{begin\_metric} $\to$ \texttt{<0|1>} $\to$ \texttt{end\_metric}
+        \item Semantics: A value of 0 implies unit edge weights (unweighted graph). A value of 1 implies costs are read from operators.
+    \end{itemize}
+    
+    \item \textbf{Variable Section:}
+    \begin{itemize}
+        \item Syntax: \texttt{begin\_variable} $\to$ \texttt{<name>} $\to$ \texttt{<layer>} $\to$ \texttt{<range>} $\to$ \texttt{<atom\_names...>} $\to$ \texttt{end\_variable}
+        \item Constraint: The layer integer represents the axiom layer; for the primary state graph, only variables are stored, though the layer is parsed for completeness.
+    \end{itemize}
+    
+    \item \textbf{Mutex Group Section:}
+    \begin{itemize}
+        \item Syntax: \texttt{begin\_mutex\_group} $\to$ \texttt{<num\_facts>} $\to$ \texttt{<var val>...} $\to$ \texttt{end\_mutex\_group}
+        \item Semantics: Defines a set of partial assignments $\{(v, d)\}$ that are mutually exclusive. This specification requires the parser to store these groups to validate generated states.
+    \end{itemize}
+    
+    \item \textbf{Operator Section:}
+    \begin{itemize}
+        \item Syntax: \texttt{begin\_operator} $\to$ \texttt{<name>} $\to$ \texttt{<prevail\_count>} $\to$ \texttt{<preconditions>} $\to$ \texttt{<effect\_count>} $\to$ \texttt{<effects>} $\to$ \texttt{<cost>} $\to$ \texttt{end\_operator}
+        \item \textbf{Effect Semantics:} An effect is specified as a quadruple \texttt{(count, conditions, var, val)}. The transition $S \to S'$ applies $S'[var] = val$ \textbf{if and only if} all pairs in conditions match the current state $S$ \cite{saslexer}.
+    \end{itemize}
+\end{itemize}
+
+\section{Data Structure Specification}
+To ensure type safety and immutability, the domain entities are specified as follows:
+
+\begin{itemize}
+    \item \textbf{State Vector:} Specified as a generic \texttt{Tuple[int, ...]}. Tuples are immutable and hashable, allowing states to serve as keys in dictionaries and nodes in the \texttt{networkx} graph.
+    \item \textbf{SASOperator Entity:}
+    \begin{itemize}
+        \item \texttt{name}: String
+        \item \texttt{cost}: Integer
+        \item \texttt{preconditions}: List of \texttt{(var\_id, val)} tuples.
+        \item \texttt{effects}: List of \texttt{(var\_id, new\_val, conditions)} tuples, where \texttt{conditions} is a list of \texttt{(var\_id, val)}.
+    \end{itemize}
+    \item \textbf{SASProblem Entity:}
+    \begin{itemize}
+        \item Contains the complete static definition: \texttt{variables}, \texttt{operators}, \texttt{mutex\_groups}, \texttt{initial\_state}, and \texttt{goal}.
+    \end{itemize}
+\end{itemize}
+
+\section{Graph Formalism}
+The State Space Graph $G = (V, E)$ is specified as a directed, weighted multigraph reduced to a simple graph:
+\begin{itemize}
+    \item $V$: The set of all unique reachable state tuples.
+    \item $E$: A set of edges $(u, v)$ where $\exists op \in Operators$ such that $apply(u, op) = v$.
+    \item \textbf{Edge Weight Specification:} $w(u, v) = \min_{op} \{ op.cost \mid apply(u, op) = v \}$. If multiple operators lead to the same state, strictly the minimum cost is preserved.
+\end{itemize}
+
+\section{Algorithm Specifications}
+
+\subsection{State Space Construction (BFS)}
+\begin{enumerate}
+    \item Initialize $Queue = [initial\_state]$, $Visited = \{initial\_state\}$.
+    \item While $Queue$ is not empty:
+    \begin{itemize}
+        \item Dequeue $current$.
+        \item For each $op$ in $Operators$:
+        \item If $op.is\_applicable(current)$:
+        \item Compute $next = op.apply(current)$.
+        \item Add Edge $(current, next)$ to Graph with weight $op.cost$.
+        \item If $next$ not in $Visited$:
+        \item Add $next$ to $Visited$ and $Queue$.
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Aingworth Approximation (Diameter)}
+\textbf{Input:} Graph $G(V, E)$, Threshold parameter $s \approx \sqrt{N \log N}$.
+\begin{enumerate}
+    \item \textbf{Classification:} Compute degrees for all $v \in V$.
+    \item \textbf{Neighborhood Generation:} For every $v$, perform partial BFS to find the set $P(v)$ of the closest $s$ nodes.
+    \item \textbf{Heuristic Selection:} Identify node $w$ maximizing the radius of $P(w)$.
+    \item \textbf{Dominating Set:} Initialize $U = V$. While $U \neq \emptyset$:
+    \begin{itemize}
+        \item Select $x$ that covers the maximum number of uncovered sets $P(v)$.
+        \item Add $x$ to $D$. Remove covered sets from $U$.
+    \end{itemize}
+    \item \textbf{Traversal:} Run full BFS from $w$, all nodes in $P(w)$, and all nodes in $D$.
+    \item \textbf{Output:} Return the maximum eccentricity found.
+\end{enumerate}
+
+% ----------------------------------------------------
+% 5. DESIGN
+% ----------------------------------------------------
+\chapter{Design}
+The software follows a modular Object-Oriented Design (OOD) pattern, implemented in Python. The architecture decouples the parsing logic from the graph analysis logic, enabling independent validation of the SAS+ processing.
+
+\section{Component Architecture}
+The system is divided into three primary subsystems:
+
+\begin{enumerate}
+    \item \textbf{Parser Subsystem (\texttt{SASParser}):}
+    \begin{itemize}
+        \item Designed as a Finite State Machine (FSM). It reads the input stream line-by-line, transitioning between processing states (e.g., \texttt{READING\_VAR}, \texttt{READING\_OP}) based on \texttt{begin\_} tokens.
+        \item It encapsulates all I/O operations and string parsing, producing a clean \texttt{SASProblem} data object.
+    \end{itemize}
+    
+    \item \textbf{Model Layer (\texttt{models.py}):}
+    \begin{itemize}
+        \item Implements the \textbf{Data Transfer Objects (DTOs)} defined in the specification using Python \texttt{dataclasses}.
+        \item Logic for operator applicability and state transitions is encapsulated within the \texttt{SASOperator} class, following the Information Expert principle.
+    \end{itemize}
+    
+    \item \textbf{Graph Subsystem (\texttt{StateSpaceBuilder}):}
+    \begin{itemize}
+        \item Acts as a bridge between the SAS+ model and the analysis tools.
+        \item Utilizes the \textbf{NetworkX} library (\texttt{nx.DiGraph}) for the underlying graph storage. This design choice delegates low-level adjacency list management to a highly optimized standard library.
+        \item Implements the BFS expansion logic to populate the graph nodes and edges.
+    \end{itemize}
+\end{enumerate}
+
+\section{Class Design (UML Description)}
+
+\subsection{\texttt{SASParser} Class}
+\begin{itemize}
+    \item \textbf{Attributes:} \texttt{lines} (Iterator).
+    \item \textbf{Methods:} \texttt{parse(content) -> SASProblem}, \texttt{\_parse\_variable()}, \texttt{\_parse\_operator()}, \texttt{\_parse\_mutex()}.
+    \item \textbf{Design Note:} Uses private helper methods (\texttt{\_}) to maintain a clean public API.
+\end{itemize}
+
+\subsection{\texttt{SASOperator} Class}
+\begin{itemize}
+    \item \textbf{Methods:}
+    \begin{itemize}
+        \item \texttt{is\_applicable(state: Tuple) -> bool}: Checks preconditions.
+        \item \texttt{apply(state: Tuple) -> Tuple}: Returns a new state tuple with effects applied.
+    \end{itemize}
+    \item \textbf{Design Note:} The \texttt{apply} method is \textbf{functional}; it does not mutate the input state but returns a new instance, preventing side effects during graph traversal.
+\end{itemize}
+
+\subsection{\texttt{GraphSolver} Module}
+\begin{itemize}
+    \item \textbf{Functions:}
+    \begin{itemize}
+        \item \texttt{exact\_diameter(graph: nx.DiGraph) -> int}: Wraps \texttt{nx.floyd\_warshall}.
+        \item \texttt{approx\_diameter\_aingworth(graph: nx.DiGraph) -> int}: Implements the custom combinatorial approximation.
+    \end{itemize}
+\end{itemize}
+
+\section{Sequence of Operations}
+\begin{enumerate}
+    \item \textbf{Instantiation:} The \texttt{SASParser} parses the raw \texttt{.sas} file and instantiates a \texttt{SASProblem} object.
+    \item \textbf{Construction:} The \texttt{StateSpaceBuilder} takes the \texttt{SASProblem}, runs the reachability BFS, and builds a \texttt{networkx.DiGraph}.
+    \item \textbf{Analysis:} The \texttt{GraphSolver} accepts the \texttt{DiGraph}. It first runs the Aingworth approximation. If the node count $|V|$ is within the safety threshold (e.g., $< 2000$), it subsequently runs the exact Floyd-Warshall algorithm for validation.
+    \item \textbf{Reporting:} Results are aggregated and printed to the console.
+\end{enumerate}
+
+\section{Technology Stack}
+\begin{itemize}
+    \item \textbf{Language:} Python 3.9+ (Selected for rapid prototyping and string processing capabilities).
+    \item \textbf{Core Libraries:}
+    \begin{itemize}
+        \item \texttt{dataclasses}: For memory-efficient structure definitions.
+        \item \texttt{typing}: For static type checking and code clarity \cite{pythonAST}.
+    \end{itemize}
+    \item \textbf{External Libraries:}
+    \begin{itemize}
+        \item \texttt{networkx}: Provides the \texttt{DiGraph} data structure and standard graph algorithms (BFS, Floyd-Warshall). Using a battle-tested library ensures that the baseline comparisons are accurate and efficient.
+    \end{itemize}
+\end{itemize}
+
+% ----------------------------------------------------
+% BIBLIOGRAPHY
+% ----------------------------------------------------
+\begin{thebibliography}{99}
+
+\bibitem{graphsurvey}
+L. Lai et al. \emph{A Survey of Distributed Graph Algorithms on Massive Graphs}. Available: \url{https://lai.me/files/graph_survey.pdf}
+
+\bibitem{saarland}
+Saarland University. \emph{Planning Formalisms: STRIPS vs. FDR (Handout)}. Available: \url{https://fai.cs.uni-saarland.de/teaching/winter18-19/planning-material/planning02-planning-formalisms-pre-handout-4up.pdf}
+
+\bibitem{decoupled}
+D. Gnad and A. Torralba. \emph{Alternatives to Explicit State Space Search: Decoupled Search}. ICAPS 2017 Tutorial. Available: \url{https://icaps17.icaps-conference.org/tutorials/T7-Decoupled-Search.pdf}
+
+\bibitem{mathworld}
+E. W. Weisstein. \emph{God's Number}. MathWorld--A Wolfram Web Resource. Available: \url{https://mathworld.wolfram.com/GodsNumber.html}
+
+\bibitem{stanfordLec}
+Stanford University. \emph{Lecture 12: Graph Algorithms}. CS357. Available: \url{https://web.stanford.edu/class/cs357/lecture12.pdf}
+
+\bibitem{backstrom93}
+C. Bäckström and B. Nebel. \emph{Complexity results for SAS+ planning}. In IJCAI, 1993. Available: \url{https://gki.informatik.uni-freiburg.de/papers/backstrom-nebel-ijcai93.pdf}
+
+\bibitem{fastdownward}
+Fast Downward. \emph{Translator Output Format}. Available: \url{https://www.fast-downward.org/latest/documentation/translator-output-format/}
+
+\bibitem{ecealgo}
+ECE Algo. \emph{Lecture 17: All-Pairs Shortest Paths}. Available: \url{https://ecealgo.com/lectures/Lec17.html}
+
+\bibitem{siam}
+T. Rokicki et al. \emph{The Diameter of the Rubik's Cube Group Is Twenty}. Available: \url{https://tomas.rokicki.com/rubik20.pdf}
+
+\bibitem{cmuSeidel}
+Carnegie Mellon University. \emph{Lecture 4: All-Pairs Shortest Paths}. 15-850: Advanced Algorithms, Fall 2018. Available: \url{https://www.cs.cmu.edu/afs/cs.cmu.edu/academic/class/15850-f18/www/scribes/lecture04.pdf}
+
+\bibitem{ifub} 
+P. Crescenzi, R. Grossi, M. Habib, L. Lanzi, and A. Marino. \emph{On Computing the Diameter of Real-World Undirected Graphs}. Theoretical Computer Science, 2013. Available: \url{https://semeval.inria.fr/2012/printemps/theme1/teams/gang/62.pdf}
+
+\bibitem{aingworth96}
+D. Aingworth, C. Chekuri, P. Indyk, and R. Motwani. \emph{Fast Estimation of Diameter and Shortest Paths (Without Matrix Multiplication)}. AAAI/SIAM, 1996. Available: \url{http://i.stanford.edu/pub/cstr/reports/cs/tn/96/34/CS-TN-96-34.pdf}
+
+\bibitem{arxiv2025}
+\emph{Preprint}. ArXiv 2511.12677, 2025. Available: \url{https://arxiv.org/pdf/2511.12677}
+
+\bibitem{sasdocs}
+B. Corcoran. \emph{sasdocs}. GitHub. Available: \url{https://github.com/benjamincorcoran/sasdocs}
+
+\bibitem{westGraphTheory}
+D. B. West. \emph{Introduction to Graph Theory}, 2nd ed. Prentice Hall, 2001.
+
+\bibitem{icapsPaper}
+J. Seipp. \emph{Efficiently Computing Transitions in Cartesian Abstractions}. ICAPS 2024. Available: \url{https://ojs.aaai.org/index.php/ICAPS/article/view/31511/33671}
+
+\bibitem{compthresh}
+J. Ouaknine et al. \emph{Completeness Thresholds for Bounded Model Checking}. Available: \url{https://people.mpi-sws.org/~joel/publications/compthresh11.pdf}
+
+\bibitem{kroening05}
+D. Kroening et al. \emph{Error explanation with distance metrics}. STTT 2005. Available: \url{https://www.kroening.com/papers/STTT-BMC-2005.pdf}
+
+\bibitem{finalroundFW}
+Final Round AI. \emph{Floyd-Warshall Algorithm}. Available: \url{https://www.finalroundai.com/articles/floyd-warshall-algorithm}
+
+\bibitem{saslexer}
+M. Msk. \emph{sas-lexer: A simple lexer for the SAS+ format}. GitHub. Available: \url{https://github.com/mishamsk/sas-lexer}
+
+\bibitem{pythonAST}
+Python Software Foundation. \emph{Abstract Syntax Trees}. Python 3 Documentation. Available: \url{https://docs.python.org/3/library/ast.html}
+
+\end{thebibliography}
+
+\end{document}

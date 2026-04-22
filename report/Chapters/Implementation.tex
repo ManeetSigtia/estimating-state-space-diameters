@@ -1,0 +1,203 @@
+\chapter{Methodology and Implementation}
+
+This chapter details the practical realization of the computational framework described in the design specification. It translates the theoretical requirements into a functional, object-oriented Python architecture, detailing the specific algorithms, data structures, and memory-management techniques utilized to parse complex planning domains, construct explicit topological graphs, and execute advanced diameter computations.
+
+\section{Project Architecture and Environment}
+To ensure maintainability and strict separation of concerns, the project was structured into a modular directory hierarchy within the root \texttt{estimating-state-space-diameters} environment:
+\begin{itemize}
+    \item \texttt{data/}: Housed the compiled SAS+ domain and problem files, categorized by topology (e.g., \texttt{1\_dense\_planning}, \texttt{2\_sparse\_planning}, \texttt{3\_scale\_free\_social}).
+    \item \texttt{src/}: Contained the core application logic, further subdivided into \texttt{parser/}, \texttt{graph/}, \texttt{algorithms/}, and \texttt{generators/}. The \texttt{generators/} subdirectory housed the synthetic graph generation utilities, specifically \texttt{generate\_random\_graphs.py} for the Erdős-Rényi benchmarks and \texttt{create\_breaker\_graph.py} for the pathological adversarial instance described in Section~\ref{subsec:breaker}.
+    \item \texttt{tests/}: Maintained the automated unit testing suite utilized for structural validation during the development lifecycle.
+\end{itemize}
+The framework was implemented in Python 3.9+, leveraging the \texttt{networkx} library for graph representations and \texttt{numpy} for efficient array operations during exact dynamic programming computations.
+
+\section{The Parser Subsystem: Memory-Efficient AST Generation}
+The parsing subsystem, encapsulated within \texttt{core.py}, was tasked with transforming serialized Fast Downward SAS+ text files into a structured Abstract Syntax Tree (AST). Given that planning domains can possess thousands of variables and operators, the parser was engineered for strict memory efficiency.
+
+\subsection{Lazy Loading via String Iterators}
+Instead of loading and retaining the entire text corpus in memory as a monolithic list of strings, the \texttt{SASParser} class was implemented as a Finite State Machine (FSM) driven by a Python \texttt{Iterator[str]}. By utilizing the native \texttt{iter()} function, the parser consumed the string payload sequentially.
+
+\begin{lstlisting}[language=Python, caption={Lazy-loading FSM loop in SASParser.}, label={lst:lazyload}]
+def parse(self, content: str) -> SASProblem:
+    self.lines = iter(content.strip().splitlines())
+    # State initializations omitted for brevity...
+
+    while True:
+        try:
+            line = next(self.lines).strip()
+            if line == "begin_variable":
+                variables.append(self._parse_variable(len(variables)))
+            elif line == "begin_operator":
+                operators.append(self._parse_operator())
+        except StopIteration:
+            break
+
+    return SASProblem(version, metric, variables, initial_state, goal, operators)
+\end{lstlisting}
+
+This lazy-loading paradigm ensured that memory overhead remained constant during the ingestion phase, as the state machine transitioned between context blocks while discarding processed text tokens.
+
+\subsection{Index Mathematics for Conditional Effects}
+The most complex phase of the AST generation involved parsing the operator effects. In the SAS+ standard, effects are not static; they often depend on nested preconditions. Naïve approaches relying on fixed-width string splitting are therefore structurally insufficient. To extract these effects safely and generically, the parser employed rigorous index mathematics to traverse the variable-length effect arrays, calculating the exact byte offset of the primary effect triplet regardless of how many preceding condition pairs occupied the same line.
+
+For an effect specified with $C$ conditions, the parser dynamically calculated the starting index of the primary effect tuple to bypass the condition blocks.
+
+\begin{lstlisting}[language=Python, caption={Index mathematics for dynamic effect extraction.}, label={lst:indexmath}]
+# line[0] is the count of conditions (C) for this specific effect
+cond_count = int(line[0])
+effect_conditions = []
+ 
+# Dynamic extraction of nested conditions
+for i in range(cond_count):
+    c_var_idx = 1 + (2 * i)
+    c_val_idx = c_var_idx + 1
+    effect_conditions.append((int(line[c_var_idx]), int(line[c_val_idx])))
+ 
+# The standard effect triplet is isolated mathematically
+base_idx = 1 + (2 * cond_count)
+var_id   = int(line[base_idx])
+pre_val  = int(line[base_idx + 1])
+post_val = int(line[base_idx + 2])
+\end{lstlisting}
+ 
+This index derivation — \texttt{base\_idx} $= 1 + (2 \times C)$ — guaranteed that the parser correctly identified the \texttt{var\_id}, \texttt{pre\_val}, and \texttt{post\_val} integers for any effect with an arbitrary number of conditional guards, subsequently encapsulating them into immutable \texttt{SASOperator} entities without branching on specific effect counts or relying on fragile regular expressions.
+
+\section{State Space Construction and Topological Filtering}
+Once the AST was generated, the \texttt{StateSpaceBuilder} converted the logical planning model into an explicit directed graph.
+
+\subsection{Reachability Traversal with $O(1)$ Deques}
+The primary state space was constructed via a forward-reachability Breadth-First Search (BFS) starting from the initial state $s_0$. To handle the potentially massive frontier of generated states, the algorithm relied on Python's \texttt{collections.deque}.
+
+\begin{lstlisting}[language=Python, caption={Reachability BFS utilizing double-ended queues.}, label={lst:bfsdeque}]
+def build_reachable_graph(self) -> nx.DiGraph:
+    graph = nx.DiGraph()
+    queue = deque([self.problem.initial_state])
+    visited: Set[Tuple[int, ...]] = {self.problem.initial_state}
+    graph.add_node(self.problem.initial_state)
+
+    while queue:
+        current_state = queue.popleft()  # O(1) dequeue
+        for op in self.problem.operators:
+            if op.is_applicable(current_state):
+                next_state = op.apply(current_state)
+                self._add_or_update_edge(graph, current_state, next_state, op)
+
+                if next_state not in visited:
+                    visited.add(next_state)
+                    queue.append(next_state)
+                    graph.add_node(next_state)
+    return graph
+\end{lstlisting}
+
+Unlike standard dynamic arrays (lists) which suffer from $O(N)$ reallocation penalties when popping from the 0-index, the double-ended queue provided strict $O(1)$ time complexity for both \texttt{append()} and \texttt{popleft()} operations. This structural choice was critical for preventing execution bottlenecks during the exhaustive traversal of highly branching domains.
+
+\subsection{Weakly Connected Component (WCC) Extraction}
+A critical prerequisite for diameter computation is graph connectivity; calculating the maximum shortest path between disconnected topological islands yields mathematical infinity. While the reachability BFS inherently generates a connected component, the framework was designed to ingest generic topologies (e.g., social networks) which may contain fragmented clusters.
+
+To enforce topological cohesion, the builder implemented a \texttt{get\_main\_component()} filter. Because planning operators can represent irreversible actions (e.g., fuel consumption), the resulting graph could be inherently asymmetric. Therefore, the algorithm utilized NetworkX's \texttt{weakly\_connected\_components()} to extract the specific subgraph containing the initial state. This ensured that the subsequent mathematical algorithms operated exclusively on a valid, strongly-referenced topological island.
+
+\section{Algorithmic Translation: The Aingworth Approximation}
+The core mathematical achievement of the implementation phase was the translation of the theoretical Aingworth combinatorial approximation into an executable module (\texttt{diameter.py}). This translation was non-trivial: the original algorithm operates on abstract graph structures with implicit set-cover subroutines, and its realization required several careful engineering decisions to bridge the gap between theoretical specification and practical execution.
+
+\subsection{Partial Traversals and the Landmark Node}
+In accordance with the theoretical specification, the algorithm computed the threshold parameter $s = \lfloor\sqrt{n \log n}\rfloor$. It executed a bounded Dijkstra traversal from every vertex $v$, forcibly terminating the search once exactly $s$ nodes were settled. This is itself a non-standard adaptation of Dijkstra's algorithm: rather than running to completion, the traversal was halted mid-execution by monitoring the size of the settled-node dictionary against the threshold $s$. These partial neighborhoods, denoted as $P(v)$, were stored as Python \texttt{set} objects. Simultaneously, the algorithm identified the landmark node $w$ — the vertex exhibiting the maximum eccentricity within its bounded search tree — as the primary candidate source for the diameter estimate.
+ 
+To study the empirical effect of neighborhood size on both approximation accuracy and runtime, the benchmarking pipeline evaluated two configurations of the Aingworth algorithm: the theoretically-derived default threshold $s = \lfloor\sqrt{n \log n}\rfloor$, and a forced override of $s = 10$, invoked via the \texttt{force\_s} parameter. The $s = 10$ configuration deliberately constrains each partial BFS to settle only ten nodes, producing smaller dominating sets and faster runtimes at the potential cost of approximation fidelity. The empirical comparison of these two configurations constitutes a key component of the evaluation in Chapter~5.
+
+\subsection{Dominating Set Construction via Greedy Set Cover}
+\label{subsec:domset}
+Step 4 of the Aingworth methodology requires the construction of a Dominating Set $D$ — a set of vertices such that every vertex in the graph lies within the partial neighborhood of at least one member of $D$. This is formally equivalent to the Set Cover problem, which is NP-hard in its exact formulation \cite{garey1979}. To render this tractable within a polynomial-time approximation framework, a greedy heuristic was implemented, which is known to achieve an approximation ratio of $O(\log n)$ relative to the optimal cover \cite{chvatal1979}.
+ 
+The implementation utilized nested Python \texttt{set} intersections to efficiently compute coverage counts:
+ 
+\begin{lstlisting}[language=Python, caption={Greedy Set Cover approximation using set intersections.}, label={lst:setcover}]
+def _greedy_dominating_set(self, universe: List, subsets: Dict) -> Set:
+    uncovered = set(universe)
+    dominating_set = set()
+ 
+    while uncovered:
+        best_v = None
+        best_cover_count = -1
+ 
+        for v in subsets:
+            if v in dominating_set:
+                continue
+ 
+            # Count intersection size with uncovered nodes
+            count = sum(1 for u in subsets[v] if u in uncovered)
+ 
+            if count > best_cover_count:
+                best_cover_count = count
+                best_v = v
+ 
+        if best_v is None or best_cover_count == 0:
+            break
+ 
+        dominating_set.add(best_v)
+        # Remove covered elements
+        uncovered.difference_update(subsets[best_v])
+ 
+    return dominating_set
+\end{lstlisting}
+ 
+Although this greedy selection carries a worst-case time complexity of $O(N^2)$ per iteration in the general case, two properties of the specific problem instance substantially reduced the practical cost. First, each partial neighborhood $P(v)$ contains at most $s = \lfloor\sqrt{n \log n}\rfloor$ nodes by construction, so each intersection count is bounded by $O(s)$ rather than $O(N)$. For sparse planning graphs with thousands of nodes, this reduces the effective intersection cost by multiple orders of magnitude relative to the theoretical worst case. Second, the C-level implementation of Python's \texttt{set.difference\_update()} — backed by hash-table probing rather than sequential comparison — provides a constant-factor speedup over equivalent Python-level iteration, further contributing to the observed practical efficiency.
+
+\section{Testing, Integration, and Verification}
+To ensure the robustness of the framework, a dedicated testing suite was developed (\texttt{test\_builder.py}, \texttt{test\_diameter.py}).
+
+\subsection{Theoretical Validation via Cartesian Generation}
+A primary challenge in graph generation is proving that the reachability algorithm has not silently missed valid state transitions. To validate this, the \texttt{build\_cartesian\_graph()} method was utilized as a mathematical foil. This method generated the complete combinatorial state space by performing a Cartesian product of all variable domains, subsequently applying every operator to every possible state through exhaustive enumeration — irrespective of reachability from the initial state. This brute-force construction served as a ground-truth reference for the BFS-based reachability traversal.
+ 
+In the unit tests, the Reachability Graph (Graph A) was dynamically compared against the Weakly Connected Component extracted from the Cartesian graph (Graph B). By confirming that the node and edge sets were perfectly isomorphic across both constructions, the framework empirically verified the correctness of the BFS traversal logic, whilst simultaneously demonstrating the physical reality of the state-space explosion problem: Cartesian generation consistently triggered predefined \texttt{MemoryError} limits on domains that the reachability BFS handled without difficulty, providing a concrete quantitative illustration of the exponential gap between the full combinatorial space and its reachable subspace.
+
+\subsection{End-to-End Execution}
+The pipeline was further verified against known toy domains, specifically \texttt{gripper\_simple} and \texttt{switch\_simple}. The \texttt{gripper\_simple} domain models a robot equipped with two grippers tasked with transporting balls between rooms — a compact, deterministic planning problem with a provably bounded and enumerable state space. The \texttt{switch\_simple} domain encodes a minimal boolean state transition system in which a single binary variable is toggled between an \textit{on} and an \textit{off} state by a single operator, producing a two-node directed cycle with a diameter of one. These tests validated the complete integration lifecycle: confirming the AST was constructed without data loss, the adjacency matrices reflected the correct edge minimizations, and the exact diameter matched mathematically predetermined values.
+
+\subsection{Pathological Graph Design: The Aingworth Breaker}
+\label{subsec:breaker}
+To stress-test the Aingworth approximation beyond standard planning topologies, a purpose-built adversarial graph was constructed programmatically via \url{src/generators/create_breaker_graph.py} and serialized to \texttt{data/4\_pathological\_custom/aingworth\_breaker.graph}. The design exploited a structural vulnerability common to partial-neighborhood-based diameter estimation algorithms: the tendency of bounded BFS searches to exhaust their node budget $s$ within dense, locally well-connected regions, preventing them from propagating toward the true diameter endpoints.
+ 
+The graph was composed of four interconnected components:
+ 
+\begin{itemize}
+    \item \textbf{Two dense clusters:} A pair of $30 \times 30$ grid graphs (900 nodes each), designated as the left and right clusters. Grid graphs provide high local connectivity and short internal diameters — the diameter of a $30 \times 30$ grid is 58 hops — ensuring that partial BFS traversals originating within either cluster exhaust their node budget before reaching the cluster boundary, and therefore never observe the long highway path that carries the true diameter.
+ 
+    \item \textbf{A highway:} A path graph of 1{,}000 nodes connecting the interior centres of the two clusters (\texttt{L\_15\_15} to \texttt{R\_15\_15} via nodes \texttt{H\_0} through \texttt{H\_999}). The true diameter of the complete graph traverses both grid interiors and the full length of this highway, requiring approximately $29 + 1{,}000 + 29 = 1{,}058$ hops, which together with the grid boundary edges yields the exact diameter of 1{,}061.
+ 
+    \item \textbf{A fake tail:} A path graph of 400 nodes branching off the highway at its midpoint (\texttt{H\_500}). This component constituted the adversarial element: by anchoring a long peripheral path at the geographic centre of the graph, it was designed to bias partial BFS landmark selection toward the highway midpoint rather than toward the true diameter endpoints located at the cluster boundaries. An algorithm that settles on \texttt{H\_500} as its landmark node $w$ would anchor its dominating set traversal at the graph's centre, systematically underestimating the diameter.
+\end{itemize}
+ 
+All nodes were relabelled to contiguous integers prior to serialization to ensure compatibility with the DIMACS edge-list parser. The resulting graph comprised 3{,}200 nodes and 4{,}881 edges. As reported in the benchmark results, both Aingworth variants correctly recovered the true diameter of 1{,}061, demonstrating that the greedy dominating set construction was sufficiently robust to overcome the fake tail's misdirection on this instance — a finding analysed further in Chapter~5.
+
+\section{Benchmarking Pipeline and Defensive Programming}
+
+\subsection{Dataset Acquisition via Fast Downward Translation}
+\label{subsec:dataset_acquisition}
+The planning domain benchmarks were sourced from established automated planning competition repositories. Each domain was represented by a pair of PDDL files: a \texttt{domain.pddl} specifying the action schema and operator preconditions, and a problem instance file (e.g., \texttt{p17.pddl}) specifying the initial state and goal conditions. These files were organized within a dedicated \texttt{problems/} directory external to the project root, with each domain occupying its own subdirectory.
+
+To translate each PDDL domain-problem pair into the SAS+ format required by the parser subsystem, the Fast Downward planning system \cite{fastdownward} was employed as an external translation tool. Fast Downward was installed as a sibling directory to the project root, and the translation step was invoked via the following command:
+
+\begin{lstlisting}[caption={Fast Downward SAS+ translation command.}, label={lst:fd}]
+python ../../fast-downward.py --translate domain.pddl p17.pddl
+\end{lstlisting}
+
+This performed multi-valued variable grounding and output an \texttt{output.sas} file conforming to the SAS+ Version 3 standard \cite{sasdocs}. The resulting files were subsequently renamed and relocated to the appropriate topology subdirectory within \texttt{data/} for ingestion by the benchmarking pipeline.
+
+For the scale-free social network benchmarks, graph files were sourced in compressed DIMACS edge-list format (\texttt{.bz2}) and loaded directly without translation, as these graphs carry no planning semantics and required only the integer edge-pair parser implemented within \texttt{run\_benchmark.py}.
+
+\subsection{Synthetic Graph Generation and Reproducibility Considerations}
+\label{subsec:synthetic}
+The three Erdős-Rényi random graphs (\texttt{erdos\_renyi\_1000.graph}, \texttt{erdos\_renyi\_5000.graph}, \texttt{erdos\_renyi\_10000.graph}) were generated programmatically via \url{src/generators/generate_random_graphs.py} using \texttt{networkx.erdos\_renyi\_graph(n,~p)}, with edge probabilities of $p = 0.01$, $p = 0.002$, and $p = 0.001$ respectively, calibrated to maintain sparse connectivity at increasing scale. This choice of the Erdős-Rényi model is consistent with its use as a standard evaluation topology in the original Aingworth et al.\ diameter approximation literature \cite{aingworth96}, providing methodological continuity with the foundational work. The generated graphs were serialized to disk in DIMACS edge-list format and subsequently loaded identically to the social network benchmarks during pipeline execution.
+ 
+It is noted that the random graph generator was invoked without a fixed random seed, as the intent was to sample representative sparse random topologies rather than to reproduce specific graph instances. The diameter and algorithmic timing results reported for these graphs are therefore specific to the instances generated prior to the benchmark run. Crucially, all three algorithms — Exact (NetworkX), Aingworth (Default), and Aingworth ($s = 10$) — operated on identical in-memory graph objects within each benchmarking round, ensuring that intra-run comparisons remain fully valid and internally consistent despite the absence of a global seed.
+
+\subsection{Pipeline Architecture and Defensive Constraints}
+\label{subsec:pipeline}
+To empirically evaluate the developed algorithms, an unsupervised round-robin benchmarking pipeline (\texttt{run\_benchmark.py}) was executed across five timed rounds. A preceding warm-up round was performed and its results discarded, mitigating cold-start effects on Python's internal caches and the operating system's memory allocator, thereby improving the stability of subsequent timing measurements.
+ 
+The exact Floyd-Warshall algorithm computes a dense $|V| \times |V|$ distance matrix, incurring $O(|V|^2)$ spatial complexity regardless of graph sparsity. While computationally manageable for small state spaces, this memory requirement scales quadratically with the number of reachable states and triggers rapid exhaustion of available RAM on standard hardware. To quantify this risk concretely: the benchmark results indicated that Floyd-Warshall completed in approximately 2 seconds for \texttt{blocksworld\_4} ($|V| = 125$), and approximately 648 seconds for \texttt{blocksworld\_5} ($|V| = 866$). Projecting this $O(|V|^3)$ scaling to the 1{,}000-node Erdős-Rényi graphs — $(1000 / 866)^3 \approx 1.54$ — suggested a per-round runtime exceeding 1{,}000 seconds, or approximately 83 minutes of Floyd-Warshall execution across five rounds for a single file. To prevent such Out-Of-Memory (OOM) operating system crashes during unsupervised benchmarking, the pipeline implemented a strict defensive programming threshold: \texttt{FW\_NODE\_LIMIT = 999}. This value was selected to admit all graphs with $|V| \leq 999$ — thereby including \texttt{blocksworld\_5} at 866 nodes — while excluding the 1{,}000-node and larger Erdős-Rényi instances for which projected runtimes rendered inclusion impractical.
+ 
+Before executing the Floyd-Warshall baseline on any graph, the framework evaluated $|V|$ against this threshold. If the node count met or exceeded 1{,}000, the $O(|V|^3)$ execution was bypassed, logging a null result and deferring exclusively to the exact NetworkX BFS-baseline and the Aingworth approximation to continue the benchmarking cycle safely.
+
+\section{Future Extensibility and Maintenance}
+The strict Object-Oriented Design ensures that the software is highly maintainable. Because the mathematical graph-solver (\texttt{DiameterCalculator}) expects only a standard \texttt{nx.DiGraph}, it is entirely decoupled from the SAS+ formalism. Future researchers can seamlessly introduce new parsing modules (e.g., direct PDDL ingestion or JSON-based state machines) by simply outputting a valid NetworkX structure. The underlying combinatorial approximation engines will continue to function without modification, ensuring the long-term utility of the framework as a domain-independent analytical tool.
