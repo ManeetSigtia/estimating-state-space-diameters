@@ -4,7 +4,7 @@ This chapter presents a rigorous empirical evaluation of the developed computati
 
 \section{Introduction to the Evaluation Pipeline and Data Treatment}
 
-The primary objective of this evaluation is to benchmark the performance of two exact baseline methods --- the $O(|V|^3)$ Floyd-Warshall algorithm and the exact $O(|V|(|V| + |E|))$ NetworkX All-Pairs Shortest Path implementation --- against the $\tilde{O}(m\sqrt{n})$ Aingworth approximation \cite{aingworth96}. To provide a comprehensive assessment, the algorithms were measured across three primary dimensions:
+The primary objective of this evaluation is to benchmark the performance of two exact baseline methods --- the $O(|V|^3)$ Floyd-Warshall algorithm and the exact $O(|V|(|E| + |V| \log |V|))$ NetworkX All-Pairs Shortest Path implementation --- against the $\tilde{O}(m\sqrt{n})$ Aingworth approximation \cite{aingworth96}. To provide a comprehensive assessment, the algorithms were measured across three primary dimensions:
 
 \begin{itemize}
     \item \textbf{Temporal Efficiency:} The wall-clock execution time (in seconds) required by each algorithm to compute or estimate the graph diameter.
@@ -19,6 +19,7 @@ To ensure the statistical validity of the temporal metrics, the benchmarking pip
 Timing stability across the five active rounds was consistent. The full per-instance arithmetic means, computed across all five rounds, are presented in Table~\ref{tab:mean_times} and Table~\ref{tab:accuracy}. All execution times discussed in the subsequent sections refer to these mean values.
 
 \section{Dataset Taxonomy and Justification}
+\label{sec:taxonomy}
 
 A common methodological weakness in the empirical evaluation of graph algorithms is over-reliance on a single topological class, producing results that do not generalise to the broader computational landscape. To evaluate the robustness of the Aingworth approximation, the benchmark dataset comprises graphs explicitly partitioned into five topological categories. Each category was selected to stress-test a specific algorithmic vulnerability within the shortest-path and set-cover subroutines. This partitioning ensures a comprehensive evaluation across both structured, human-designed problem spaces and unstructured, naturally generated topologies.
 
@@ -88,16 +89,16 @@ The benchmark results reveal a stark performance divergence even on small state 
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.85\textwidth]{figures/fig1_fw_vs_networkx.pdf}
-    \caption{Mean execution time (log scale) versus node count for Floyd-Warshall and NetworkX Exact, evaluated on the three Floyd-Warshall-eligible instances. The cubic growth of Floyd-Warshall is clearly visible against the near-quadratic scaling of the NetworkX BFS baseline.}
-    \label{fig:fw_vs_nx}
+    \includegraphics[width=0.85\textwidth]{Figures/fig1_apsp_wall.png}
+    \caption{Execution time (log--log scale) versus node count for Floyd-Warshall, NetworkX Exact, and Aingworth-Default across five progressive planning instances (\texttt{blocksworld\_4}, \texttt{gripper\_4}, \texttt{blocksworld\_5}, \texttt{blocksworld\_6}, \texttt{gripper\_8}). Floyd-Warshall's line terminates abruptly at 866 nodes (\texttt{blocksworld\_5}), beyond which the $\Theta(|V|^3)$ cost rendered execution infeasible within practical time bounds. NetworkX Exact and Aingworth-Default continue to scale across the full range, empirically justifying the 999-node safety cutoff and establishing the motivating case for the approximation.}
+    \label{fig:apsp_wall}
 \end{figure}
 
 \subsection{The Algorithmic Argument}
 
 The theoretical divergence is rooted in asymptotic complexity. Floyd-Warshall computes a dense distance matrix via a triple-nested loop, yielding a strict $\Theta(|V|^3)$ time complexity regardless of graph topology or edge count.
 
-NetworkX executes a BFS (or Dijkstra's algorithm for weighted graphs) from every vertex. For unweighted graphs, a single BFS resolves in $O(|V| + |E|)$, yielding a total complexity of $O(|V|(|V| + |E|))$. The critical factor is sparsity. Automated planning state spaces and scale-free networks are structurally sparse: the edge count $|E|$ is proportionally far closer to $O(|V|)$ than to the maximum $O(|V|^2)$. By exploiting this sparsity, the NetworkX complexity effectively collapses toward $O(|V|^2)$ on these specific topologies --- an entire polynomial degree better than Floyd-Warshall.
+NetworkX executes Dijkstra's algorithm from every vertex. A single run of Dijkstra's algorithm using a binary heap resolves in $O(|E| + |V| \log |V|)$, yielding a total complexity of $O(|V|(|E| + |V| \log |V|))$ for the all-pairs computation. The critical factor is graph-theoretic sparsity. It is important to distinguish this from the taxonomic label used in Section~\ref{sec:taxonomy}: the category \textit{Dense Planning Domains} refers to the planning-domain property of high branching factors and exponential state-space expansion, not to the edge density of the resulting graph. In graph-theoretic terms, all benchmarked state spaces are structurally \textit{sparse}: the edge count $|E|$ is proportionally far closer to $O(|V|)$ than to the maximum $O(|V|^2)$. For example, \texttt{blocksworld\_5} contains 866 nodes and 2,090 edges (average degree $\approx 2.4$), and \texttt{gripper\_8} contains 11,776 nodes and 48,640 edges (average degree $\approx 4.1$). Scale-free social networks are similarly sparse: \texttt{PGPgiantcompo} has 6,006 nodes and only 5,430 edges. By exploiting this structural sparsity, the NetworkX all-pairs computation effectively collapses toward $O(|V|^2 \log |V|)$ on these specific topologies --- asymptotically vastly superior to the $\Theta(|V|^3)$ bound of Floyd-Warshall.
 
 \subsection{Systems Architecture and Memory Locality}
 
@@ -105,7 +106,7 @@ The performance gap is compounded by computer systems architecture. Floyd-Warsha
 
 NetworkX avoids this entirely through its internal representation. Graphs are stored as a Python dict-of-dicts adjacency list, allocating memory only for existing edges. For the same 10,000-node Erdős-Rényi graph with $p = 0.001$, approximately 50,000 edges exist --- NetworkX allocates 50,000 adjacency entries versus Floyd-Warshall's 100,000,000 matrix cells, a reduction of three orders of magnitude. The practical consequence is that the NetworkX adjacency data fits within the CPU's L2 or L3 cache (typically 4--32~MB on modern processors), eliminating the main-memory bottleneck entirely.
 
-Furthermore, NetworkX delegates its core operations --- dictionary hash-table probing, priority queue insertion and extraction in Dijkstra's algorithm, and BFS queue management --- to pre-compiled C extensions (CPython built-ins) and Cython-compiled routines within the NetworkX library itself. C-compiled code avoids the bytecode interpretation overhead of the CPython runtime, eliminates Python object allocation per loop iteration, and enables the compiler to apply low-level optimisations such as loop unrolling and SIMD vectorisation where applicable. Each of these mechanisms contributes a constant-factor speedup over equivalent pure-Python implementations. Collectively, NetworkX outperforms Floyd-Warshall not merely by executing fewer theoretical operations, but by operating in mechanical sympathy with the host machine's memory hierarchy and instruction pipeline.
+Furthermore, while NetworkX is a pure Python library, it achieves high performance by mapping its graph representations directly onto CPython's highly optimised built-in data structures. The core operations --- hash-table probing in nested dictionaries and priority queue management via the \texttt{heapq} module in Dijkstra's algorithm --- are executed at the C level within the Python interpreter. This architectural sympathy avoids much of the bytecode interpretation overhead of the CPython runtime and reduces Python object allocation per loop iteration. Each of these mechanisms contributes a constant-factor speedup over naïve pure-Python implementations. Collectively, NetworkX outperforms Floyd-Warshall not merely by executing fewer theoretical operations, but by operating in mechanical sympathy with the host machine's memory hierarchy and the C-level optimisations of the Python interpreter.
 
 It is worth noting that the alternative design considered in Chapter 3 --- implementing the framework in C++ with the Boost Graph Library --- would have reduced interpreter overhead uniformly across all algorithms. However, the rapid prototyping of the Aingworth set-cover subroutine and the lazy-loading FSM parser would have required substantially greater development effort in C++, and the relative performance ordering between algorithms would be unchanged.
 
@@ -121,7 +122,7 @@ The default Aingworth configuration achieved 100\% accuracy --- recovering the e
 
 The \texttt{hanoi\_8} result deserves specific attention. The algorithm correctly identified a diameter of 255 across a 6,561-node graph in a mean of approximately 33.7 seconds, compared to the exact NetworkX baseline's mean of approximately 189.1 seconds --- a speedup of approximately 5.6$\times$ while maintaining 100\% accuracy. This represents a case where the approximation achieves both complete correctness and substantial runtime reduction simultaneously, which is precisely the operating condition for which the algorithm was designed.
 
-An interesting secondary observation concerns the Erdős-Rényi graphs. Despite scaling from 1,000 to 10,000 nodes, the true diameter remains either 6 or 7 across all three instances. This reflects the well-established small-world property of Erdős-Rényi random graphs with supercritical connectivity: as node count grows, the diameter increases only logarithmically rather than proportionally.
+An interesting secondary observation concerns the Erdős-Rényi graphs. Despite scaling from 1,000 to 10,000 nodes, the true diameter remains either 6 or 7 across all three instances. Before attributing this to a structural property, it is worth noting that the benchmarking pipeline applied Weakly Connected Component extraction prior to analysis, meaning the measured diameter reflects the largest connected island in each generated graph rather than the full graph. That said, all three graphs were generated with edge probabilities above the theoretical connectivity threshold $p_c = \ln n / n$ --- specifically $p = 0.01$ against $p_c \approx 0.0069$ for $n = 1{,}000$, and $p = 0.001$ against $p_c \approx 0.00092$ for $n = 10{,}000$ --- making near-complete connectivity statistically expected. Under these supercritical conditions, the observed near-constant diameter is consistent with the well-established small-world property of Erdős-Rényi random graphs: as node count grows, the diameter increases only logarithmically rather than proportionally. The specific observed values of 6--7 are consistent with this regime, though the exact values will vary between random instances.
 
 \begin{table}[htbp]
 \centering
@@ -189,20 +190,23 @@ The temporal advantage of the Aingworth algorithm is topology-dependent. The the
 
 \textbf{Scale-free social networks} present a result that diverges from the naïve expectation. Rather than yielding a speedup from hub-based domination, the \textit{default} Aingworth configuration was consistently slower than the exact NetworkX baseline on all three social network instances: \texttt{PGPgiantcompo} (71.4s vs 16.3s), \texttt{cond-mat} (135.2s vs 66.7s), and \texttt{hep-th} (29.8s vs 16.2s). The cause is the overhead of the $O(|V|^2)$ set-cover intersection logic: although hubs are eventually identified as covering vertices, the greedy subroutine must first evaluate all candidate neighborhoods exhaustively. On graphs with thousands of peripheral nodes each possessing non-trivial partial neighborhoods, this intersection cost dominates. The $s = 10$ configuration resolves this by severely limiting neighborhood sizes, and does achieve speedup on social network instances --- as discussed in Section~\ref{sec:paramtuning}.
 
+These topology-dependent outcomes are captured synthetically in Figure~\ref{fig:topology_divide}, which expresses the performance of the default Aingworth configuration as a \textit{speedup multiplier} --- the ratio of exact NetworkX time to Aingworth-Default time --- aggregated by topological class. Values above the break-even line of $1.0\times$ indicate that Aingworth is faster; values below indicate it is slower.
+
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.95\textwidth]{figures/fig2_algorithm_comparison.pdf}
-    \caption{Mean execution times for Exact (NetworkX), Aingworth-Default, and Aingworth-$s$=10 across all instances with $|V| \geq 3{,}000$, sorted by node count. Note the log scale on the time axis. The visitall\_3x4 bars extend substantially beyond all others, illustrating the grid topology anomaly.}
-    \label{fig:algo_comparison}
+    \includegraphics[width=0.95\textwidth]{Figures/fig2_topology_divide.png}
+    \caption{Mean speedup multiplier (Exact time / Aingworth-Default time) for each topological class, with the dashed red line marking the break-even point at $1.0\times$. Dense Planning and Random Graph instances comfortably exceed break-even, confirming the $\tilde{O}(m\sqrt{n})$ advantage on structurally varied topologies. The Pathological class represents the single adversarial \texttt{aingworth\_breaker} instance, which the algorithm handles with a 5.2$\times$ speedup despite the adversarial construction. Sparse Planning (Visitall) falls well below break-even, illustrating the grid topology anomaly analysed in Section~\ref{sec:visitall}. Social Networks also fall below break-even under the default configuration, a failure addressed by parameter tuning in Section~\ref{sec:paramtuning}.}
+    \label{fig:topology_divide}
 \end{figure}
 
 \subsection{The Resilience of the Greedy Set Cover: The Breaker Graph}
 
-As described in Section 5.2.4, the \texttt{aingworth\_breaker} graph was engineered to bias the landmark node $w$ toward the graph's geographic centre, theoretically preventing full BFS traversals from being anchored at the true diameter endpoints. Theory predicted underestimation; practice refuted it.
+As described in Section 4.4.4, the \texttt{aingworth\_breaker} graph was engineered to bias the landmark node $w$ toward the graph's geographic centre, theoretically preventing full BFS traversals from being anchored at the true diameter endpoints. Theory predicted underestimation; practice refuted it.
 
 Both Aingworth configurations recovered the exact true diameter of 1,061, while executing substantially faster than the exact NetworkX baseline: the default configuration completed in a mean of approximately 4.7 seconds versus 24.6 seconds for the exact method --- a 5.2$\times$ speedup. While the fake tail successfully misdirected the initial landmark selection, the greedy Set Cover was forced to select boundary nodes within the dense $30 \times 30$ grids to satisfy the mathematical requirement that all partial neighborhoods $P(v)$ are covered. Full BFS traversals were consequently launched from the grid extremities regardless of $w$'s sub-optimal placement, recovering the true diameter. This empirical result demonstrates that the algorithm's multi-layered approach --- combining maximum-depth landmark heuristics with set-cover domination --- provides robust protection against localised adversarial structures of this design.
 
 \section{The Visitall Timing Anomaly: When the Approximation Fails Its Time Bound}
+\label{sec:visitall}
 
 While the Aingworth approximation demonstrated clear temporal advantages on dense and random topologies, the empirical data reveals a significant vulnerability on the uniform sparse planning domains. Theory predicts that the $\tilde{O}(m\sqrt{n})$ runtime bound guarantees a speedup over exact APSP; the \texttt{visitall} domains provide a concrete refutation of this expectation in practice.
 
@@ -229,15 +233,22 @@ The threshold parameter $s$ controls the size of each partial neighborhood. Theo
 
 On medium-scale dense planning domains, $s = 10$ produced measurable speedups without accuracy degradation. For \texttt{blocksworld\_5}, the $s = 10$ configuration completed in approximately 0.78 seconds against the default's 1.33 seconds, while correctly recovering the exact diameter of 16. For \texttt{blocksworld\_6}, $s = 10$ averaged approximately 60.6 seconds against the default's 112.3 seconds, again with 100\% accuracy. This occurs because dense planning domains have sufficiently high local connectivity that ten nodes adequately saturate a partial neighborhood within one or two hops, capturing strongly connected local states without requiring the larger budget of the default configuration.
 
-For scale-free social networks, $s = 10$ resolved the overhead problem that caused the default configuration to underperform. \texttt{PGPgiantcompo} dropped from 71.4 seconds (default) to 13.9 seconds ($s = 10$) --- faster even than the exact baseline's 16.3 seconds. \texttt{cond-mat} dropped from 135.2 seconds to 33.3 seconds, and \texttt{hep-th} from 29.8 seconds to 9.6 seconds. On power-law networks, peripheral nodes reach a hub within a small number of hops, making a budget of ten nodes sufficient.
-
-However, $s = 10$ does not universally improve performance on all large graphs. For \texttt{gripper\_8} ($|V| = 11{,}776$), the $s = 10$ configuration produced a mean of 174.4 seconds against the default's 126.3 seconds --- 38\% slower. For the large Erdős-Rényi instances, $s = 10$ was similarly slower: \texttt{erdos\_renyi\_5000} took 39.4 seconds versus the default's 33.5 seconds, and \texttt{erdos\_renyi\_10000} took 169.6 seconds versus 138.8 seconds. The explanation is consistent across these cases: with $s = 10$, each partial neighborhood covers only ten nodes. For a graph of 11,776 nodes, the dominating set must select approximately $11{,}776 / 10 \approx 1{,}178$ vertices to achieve full coverage, compared to only $11{,}776 / \lfloor\sqrt{11{,}776 \cdot \ln(11{,}776)}\rfloor \approx 35$ vertices under the default configuration. Running full BFS traversals from 1,178 starting points in a graph with 48,640 edges substantially exceeds the cost of 35 traversals, negating the savings from smaller partial neighborhoods.
+For scale-free social networks, $s = 10$ resolved the overhead problem that caused the default configuration to underperform. \texttt{PGPgiantcompo} dropped from 71.4 seconds (default) to 13.9 seconds ($s = 10$) --- faster even than the exact baseline's 16.3 seconds. \texttt{cond-mat} dropped from 135.2 seconds to 33.3 seconds, and \texttt{hep-th} from 29.8 seconds to 9.6 seconds. On power-law networks, peripheral nodes reach a hub within a small number of hops, making a budget of ten nodes sufficient. Figure~\ref{fig:hub_spoke} directly visualises this rescue: across all three social network instances, $s = 10$ not only closes the performance gap with the exact baseline but surpasses it.
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.95\textwidth]{figures/fig3_parameter_tuning.pdf}
-    \caption{Mean execution times for Aingworth-Default versus Aingworth-$s$=10 across all instances. Instances where $s$=10 introduces an accuracy error are annotated. Instances where $s$=10 is slower than the default despite achieving accuracy are highlighted, illustrating the dominating-set inflation effect.}
-    \label{fig:param_tuning}
+    \includegraphics[width=0.85\textwidth]{Figures/fig3_hub_spoke.png}
+    \caption{Execution times for Exact (NetworkX), Aingworth-Default, and Aingworth-$s$=10 across the three scale-free social network instances. The default configuration is consistently slower than the exact baseline due to the $O(|V|^2)$ set-cover intersection overhead on hub-dominated topologies. Restricting the neighborhood budget to $s = 10$ bypasses this bottleneck: all three instances under $s = 10$ are faster than the exact baseline, demonstrating that parameter tuning can rescue the approximation precisely where the default configuration fails.}
+    \label{fig:hub_spoke}
+\end{figure}
+
+However, $s = 10$ does not universally improve performance on all large graphs. For \texttt{gripper\_8} ($|V| = 11{,}776$), the $s = 10$ configuration produced a mean of 174.4 seconds against the default's 126.3 seconds --- 38\% slower. For the large Erdős-Rényi instances, $s = 10$ was similarly slower: \texttt{erdos\_renyi\_5000} took 39.4 seconds versus the default's 33.5 seconds, and \texttt{erdos\_renyi\_10000} took 169.6 seconds versus 138.8 seconds. The explanation is consistent across these cases: with $s = 10$, each partial neighborhood covers only ten nodes. For a graph of 11,776 nodes, the dominating set must select approximately $11{,}776 / 10 \approx 1{,}178$ vertices to achieve full coverage, compared to only $11{,}776 / \lfloor\sqrt{11{,}776 \cdot \ln(11{,}776)}\rfloor \approx 35$ vertices under the default configuration. Running full BFS traversals from 1,178 starting points in a graph with 48,640 edges substantially exceeds the cost of 35 traversals, negating the savings from smaller partial neighborhoods. Figure~\ref{fig:penalty_s10} illustrates this asymmetry: on instances without a hub-and-spoke topology, the dominating set inflates far beyond the savings from smaller partial neighborhoods.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{Figures/fig4_penalty_s10.png}
+    \caption{Execution times for Aingworth-Default versus Aingworth-$s$=10 across four large dense and random graph instances. \texttt{blocksworld\_6} and \texttt{visitall\_2x5} show $s = 10$ completing faster than the default budget, reflecting locally well-connected structures where small neighborhoods still achieve adequate coverage. \texttt{gripper\_8} and \texttt{erdos\_renyi\_10000} show a pronounced penalty: on \texttt{gripper\_8}, the restricted budget forces selection of $\sim$1,178 dominating set vertices versus $\sim$35 under the default $\lfloor\sqrt{n \log n}\rfloor$ configuration, with a corresponding 38\% runtime increase. This unpredictability confirms that the $\lfloor\sqrt{n \log n}\rfloor$ formulation is not conservative overengineering but a mathematically necessary calibration for general-purpose use.}
+    \label{fig:penalty_s10}
 \end{figure}
 
 \subsection{The $s = 10$ Accuracy Failures}
@@ -259,7 +270,7 @@ The empirical evaluation in this chapter provides a data-driven synthesis of the
 \begin{itemize}
     \item \textbf{Domain Parsing and Graph Construction:} Fully satisfied. The isomorphism tests between the reachability BFS and the exhaustive Cartesian enumeration confirmed correct interpretation of SAS+ conditional effects and operator preconditions. The \texttt{hanoi\_8} diameter of $255 = 2^8 - 1$ provides the strongest single correctness signal.
 
-    \item \textbf{Exact Diameter Computation:} Fully satisfied. Both Floyd-Warshall and NetworkX BFS were implemented correctly. The evaluation confirmed the theoretical prediction that sparse adjacency traversal vastly outperforms dense matrix DP on planning topologies, with the 999-node cutoff successfully preventing OOM failures throughout unsupervised execution.
+    \item \textbf{Exact Diameter Computation:} Fully satisfied. Both Floyd-Warshall and NetworkX BFS were implemented correctly. The evaluation confirmed the theoretical prediction that sparse adjacency traversal vastly outperforms dense matrix DP on planning topologies, with the 999-node cutoff successfully preventing Out Of Memory failures throughout unsupervised execution.
 
     \item \textbf{Approximate Diameter Estimation:} Fully satisfied and exceeding expectations. The default Aingworth configuration achieved 100\% accuracy on all 16 instances, substantially exceeding the pessimistic $2/3$ theoretical floor. Significant speedups were observed on dense planning domains (up to 5.6$\times$ on \texttt{hanoi\_8}) and large random graphs (5.2$\times$ on \texttt{erdos\_renyi\_10000}). The algorithm successfully resisted the adversarial \texttt{aingworth\_breaker} topology. The identified failure modes --- the visitall timing anomaly and the two $s = 10$ accuracy failures --- are precisely characterised and consistent with the algorithm's theoretical structure, rather than indicative of implementation defects.
 \end{itemize}
@@ -267,9 +278,9 @@ The empirical evaluation in this chapter provides a data-driven synthesis of the
 \subsection{Verification of Non-Functional Requirements}
 
 \begin{itemize}
-    \item \textbf{Modularity and Decoupling:} Confirmed. The \texttt{DiameterCalculator} processed both directed planning graphs and undirected social and random network files without any code modification, validating the architectural separation established in Chapter 3.
+    \item \textbf{Modularity and Decoupling:} The \texttt{DiameterCalculator} processed both directed planning graphs and undirected social and random network files without any code modification, validating the architectural separation established in Chapter 3.
 
-    \item \textbf{Memory Safety:} Confirmed. The 999-node Floyd-Warshall cutoff prevented OOM failures throughout all benchmarking rounds. The empirical FW scaling between \texttt{blocksworld\_4} and \texttt{blocksworld\_5} closely matches the theoretically predicted cubic factor, directly validating the necessity of the threshold.
+    \item \textbf{Memory Safety:} The 999-node Floyd-Warshall cutoff successfully prevented temporal budget exhaustion and potential memory failures throughout all benchmarking rounds. The empirical FW scaling between \texttt{blocksworld\_4} and \texttt{blocksworld\_5} closely matches the theoretically predicted cubic factor, directly validating the necessity of the threshold.
 \end{itemize}
 
 \subsection{Overall Assessment}

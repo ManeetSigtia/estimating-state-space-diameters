@@ -17,7 +17,7 @@ To achieve this, the system was required to fulfil the following core functional
 \subsection{Non-Functional Requirements}
 \begin{itemize}
     \item \textbf{Modularity and Decoupling:} The architecture required strict decoupling between the \textit{Parser} (text and AST processing) and the \textit{Solver} (graph algorithms). This ensured the mathematical engines could be tested on synthetic datasets (e.g., Erdős-Rényi graphs) independent of the SAS+ parser.
-    \item \textbf{Memory Safety Constraints:} Due to the $O(V^2)$ spatial complexity of dynamic programming approaches, the system was required to implement strict execution cutoffs (e.g., bypassing Floyd-Warshall for $|V| \geq 1000$) to prevent out-of-memory (OOM) operating system crashes during unsupervised benchmarking.
+    \item \textbf{Execution Safety Constraints:} Due to the $\Theta(V^3)$ time complexity and $O(V^2)$ spatial complexity of Floyd-Warshall, the system was required to implement strict execution cutoffs (e.g., bypassing Floyd-Warshall for $|V| \geq 1000$) to prevent both temporal budget exhaustion during unsupervised benchmarking and potential memory exhaustion for larger future inputs.
     \item \textbf{Technology Stack:} The framework was designated to be built in Python 3.9+, leveraging the \texttt{networkx} library for underlying directed graph (\texttt{DiGraph}) data structures.
 \end{itemize}
 
@@ -121,7 +121,12 @@ The \texttt{StateSpaceBuilder} acted as the critical bridge between the parsed S
 \end{itemize}
 
 \subsection{The Graph Solver: \texttt{diameter.py}}
-The \texttt{DiameterCalculator} module was entirely decoupled from the SAS+ domain logic, accepting only the constructed \texttt{nx.DiGraph}. This separation of concerns allowed the module to process arbitrary graph topologies (such as scale-free or random networks). 
+The \texttt{DiameterCalculator} module was entirely decoupled from the
+SAS+ domain logic, accepting any valid NetworkX graph object. Planning
+domain graphs are passed as \texttt{nx.DiGraph} instances to preserve
+directional semantics, while undirected \texttt{nx.Graph} inputs ---
+used for social network and random graph benchmarks --- are handled
+transparently without modification. This separation of concerns allowed the module to process arbitrary graph topologies (such as scale-free or random networks). 
 \begin{itemize}
     \item It contained the exact $O(V^3)$ Floyd-Warshall implementation.
     \item It contained the sophisticated Aingworth combinatorial approximation. All \textbf{Phase 2 BFS operations}—specifically the partial neighborhood traversals and the full dominating set traversals required to estimate the diameter—were executed within this isolated mathematical subsystem.
